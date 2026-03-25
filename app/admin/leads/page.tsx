@@ -1,0 +1,181 @@
+'use client';
+
+import { useEffect, useState } from 'react';
+import { Users, Phone, Mail, MapPin, FileText, Clock } from 'lucide-react';
+
+interface Lead {
+  id: string;
+  address: string;
+  insurer: string | null;
+  claim_no: string | null;
+  our_total: number;
+  insurance_total: number;
+  status: 'DRAFT' | 'SENT';
+  created_at: string;
+  customer: { id: string; name: string; phone: string; email: string | null };
+}
+
+function fmt(n: number) { return `$${n.toLocaleString(undefined, { minimumFractionDigits: 0 })}`; }
+function fmtDate(d: string) {
+  const diff = Math.floor((Date.now() - new Date(d).getTime()) / 1000 / 60);
+  if (diff < 60) return `${diff}m ago`;
+  if (diff < 1440) return `${Math.floor(diff / 60)}h ago`;
+  return `${Math.floor(diff / 1440)}d ago`;
+}
+
+export default function LeadsPage() {
+  const [leads, setLeads] = useState<Lead[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+
+  const load = async () => {
+    setLoading(true);
+    const res = await fetch('/api/admin/leads');
+    const data = await res.json();
+    setLeads(data.leads || []);
+    setTotal(data.total || 0);
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const markSent = async (id: string) => {
+    await fetch(`/api/admin/estimates/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'SENT' }),
+    });
+    load();
+  };
+
+  const draftLeads = leads.filter(l => l.status === 'DRAFT');
+  const sentLeads  = leads.filter(l => l.status === 'SENT');
+
+  return (
+    <div className="p-6 max-w-6xl mx-auto">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-2xl font-bold text-white">Leads</h1>
+          <p className="text-gray-400 text-sm mt-1">{total} unconverted estimates needing follow-up</p>
+        </div>
+      </div>
+
+      {/* Summary */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        {[
+          { label: 'Total Leads',    value: total,                    color: 'text-white' },
+          { label: 'New (Draft)',    value: draftLeads.length,        color: 'text-blue-400' },
+          { label: 'Sent / Pending',value: sentLeads.length,         color: 'text-yellow-400' },
+          { label: 'Pipeline Value', value: fmt(leads.reduce((s, l) => s + l.our_total, 0)), color: 'text-green-400' },
+        ].map(({ label, value, color }) => (
+          <div key={label} className="bg-gray-800 border border-gray-700 rounded-xl p-4">
+            <div className="text-xs text-gray-400 mb-1">{label}</div>
+            <div className={`text-2xl font-black ${color}`}>{value}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* New leads needing outreach */}
+      {draftLeads.length > 0 && (
+        <div className="mb-6">
+          <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3 flex items-center gap-1.5">
+            <Clock className="w-3.5 h-3.5 text-red-400" />
+            <span className="text-red-400">New — Needs Contact</span>
+          </h2>
+          <div className="space-y-2">
+            {draftLeads.map(lead => (
+              <div key={lead.id} className="bg-gray-800 border border-red-900/30 rounded-xl p-4 hover:border-red-700/50 transition-colors">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-3 mb-2">
+                      <span className="font-semibold text-white">{lead.customer.name}</span>
+                      <span className="text-xs text-gray-500">{fmtDate(lead.created_at)}</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-gray-400">
+                      <div className="flex items-center gap-1.5">
+                        <Phone className="w-3 h-3" />{lead.customer.phone}
+                      </div>
+                      {lead.customer.email && (
+                        <div className="flex items-center gap-1.5">
+                          <Mail className="w-3 h-3" />{lead.customer.email}
+                        </div>
+                      )}
+                      <div className="flex items-center gap-1.5 col-span-2">
+                        <MapPin className="w-3 h-3" />{lead.address}
+                      </div>
+                      {lead.insurer && <div>Insurer: {lead.insurer}</div>}
+                      {lead.claim_no && <div>Claim: {lead.claim_no}</div>}
+                    </div>
+                  </div>
+                  <div className="flex-shrink-0 text-right">
+                    <div className="text-lg font-black text-white">{fmt(lead.our_total)}</div>
+                    <div className="text-xs text-gray-500">Ins: {fmt(lead.insurance_total)}</div>
+                    <div className="flex gap-2 mt-3">
+                      <a href={`tel:${lead.customer.phone}`}
+                        className="px-3 py-1.5 bg-red-700 hover:bg-red-600 text-white text-xs font-semibold rounded-lg flex items-center gap-1">
+                        <Phone className="w-3 h-3" /> Call
+                      </a>
+                      <a href={`/admin/estimates/${lead.id}`}
+                        className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-200 text-xs rounded-lg flex items-center gap-1">
+                        <FileText className="w-3 h-3" /> View
+                      </a>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Sent / waiting */}
+      {sentLeads.length > 0 && (
+        <div>
+          <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3">Estimate Sent — Awaiting Decision</h2>
+          <div className="bg-gray-800 border border-gray-700 rounded-xl overflow-hidden">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-700 text-left">
+                  <th className="px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Customer</th>
+                  <th className="px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Address</th>
+                  <th className="px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Insurer</th>
+                  <th className="px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider text-right">Our Total</th>
+                  <th className="px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">Submitted</th>
+                  <th className="px-4 py-3"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {sentLeads.map(lead => (
+                  <tr key={lead.id} className="border-b border-gray-700/50 hover:bg-gray-700/30 transition-colors">
+                    <td className="px-4 py-3">
+                      <div className="font-medium text-white">{lead.customer.name}</div>
+                      <div className="text-gray-400 text-xs">{lead.customer.phone}</div>
+                    </td>
+                    <td className="px-4 py-3 text-gray-300 text-xs max-w-48 truncate">{lead.address}</td>
+                    <td className="px-4 py-3 text-gray-400 text-xs">{lead.insurer || '—'}</td>
+                    <td className="px-4 py-3 text-right font-mono font-semibold text-white">{fmt(lead.our_total)}</td>
+                    <td className="px-4 py-3 text-gray-400 text-xs">{fmtDate(lead.created_at)}</td>
+                    <td className="px-4 py-3">
+                      <a href={`/admin/estimates/${lead.id}`}
+                        className="px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-200 text-xs rounded transition-colors">
+                        View
+                      </a>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {!loading && leads.length === 0 && (
+        <div className="bg-gray-800 border border-gray-700 rounded-xl p-12 text-center">
+          <Users className="w-10 h-10 text-gray-600 mx-auto mb-3" />
+          <p className="text-gray-400">No open leads right now. All estimates have been converted or closed.</p>
+        </div>
+      )}
+    </div>
+  );
+}

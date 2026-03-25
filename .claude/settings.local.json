@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:www.weather.gov)",
+      "WebFetch(domain:docs.tomorrow.io)",
+      "Bash(npm run:*)",
+      "Bash(pm2 restart:*)",
+      "Bash(pm2 status:*)",
+      "Bash(curl -s http://localhost:3020/api/admin/storm/forecast)"
+    ]
+  }
+}

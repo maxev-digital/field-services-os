@@ -1,0 +1,730 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Auth ────────────────────────────────────────────────────────────────────
+
+model admin_users {
+  id            String           @id @default(cuid())
+  email         String           @unique
+  password_hash String
+  name          String
+  role          String           @default("admin")
+  created_at    DateTime         @default(now())
+  sessions      admin_sessions[]
+}
+
+model admin_sessions {
+  id         String      @id @default(cuid())
+  user_id    String
+  user       admin_users @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  expires_at DateTime
+  created_at DateTime    @default(now())
+}
+
+// ─── Customers ───────────────────────────────────────────────────────────────
+
+model customers {
+  id         String               @id @default(cuid())
+  name       String
+  phone      String
+  email      String?
+  address    String?
+  notes      String?
+  created_at DateTime             @default(now())
+  updated_at DateTime             @updatedAt
+  estimates           estimates[]
+  jobs                jobs[]
+  documents           customer_documents[]
+  activity            customer_activity[]
+  inspection_reports  inspection_reports[]
+}
+
+model customer_documents {
+  id           String    @id @default(cuid())
+  customer_id  String
+  customer     customers @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+  display_name String
+  filename     String
+  doc_type     String    @default("other")
+  file_path    String
+  size_bytes   Int       @default(0)
+  uploaded_at  DateTime  @default(now())
+}
+
+model customer_activity {
+  id          String       @id @default(cuid())
+  customer_id String
+  customer    customers    @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+  type        ActivityType @default(NOTE)
+  note        String?
+  created_by  String?
+  created_at  DateTime     @default(now())
+}
+
+enum ActivityType {
+  NOTE
+  CALL
+  EMAIL
+  MEETING
+  STATUS_CHANGE
+  DOCUMENT_UPLOADED
+}
+
+// ─── Line Item Master ────────────────────────────────────────────────────────
+
+model line_item_master {
+  id         String                @id
+  label      String
+  unit       String
+  xactimate  Float
+  ours       Float
+  category   String
+  sort_order Int                   @default(0)
+  active     Boolean               @default(true)
+  items      estimate_line_items[]
+}
+
+// ─── Estimates ───────────────────────────────────────────────────────────────
+
+model estimates {
+  id               String                @id @default(cuid())
+  customer_id      String
+  customer         customers             @relation(fields: [customer_id], references: [id])
+  address          String
+  insurer          String?
+  claim_no         String?
+  adj_date         String?
+  insurance_total  Float
+  our_total        Float
+  savings          Float
+  savings_pct      Float
+  status           EstimateStatus        @default(DRAFT)
+  job_id           String?
+  line_items         estimate_line_items[]
+  change_orders      change_orders[]
+  invoice            invoices?
+  payment_schedule   payment_schedule_items[]
+  signature          contract_signatures?
+  material_order     material_orders?
+  ev_reports         ev_reports[]
+  job_costs          job_costs[]
+  created_at         DateTime              @default(now())
+  updated_at       DateTime              @updatedAt
+  sent_at          DateTime?
+  approved_at      DateTime?
+}
+
+enum EstimateStatus {
+  DRAFT
+  SENT
+  APPROVED
+  DECLINED
+  INVOICED
+  PAID
+}
+
+model estimate_line_items {
+  id                 String           @id @default(cuid())
+  estimate_id        String
+  estimate           estimates        @relation(fields: [estimate_id], references: [id], onDelete: Cascade)
+  line_item_id       String
+  master             line_item_master @relation(fields: [line_item_id], references: [id])
+  label              String
+  category           String
+  unit               String
+  qty                Float
+  xactimate_per_unit Float
+  our_per_unit       Float
+  ins_amt            Float
+  our_amt            Float
+  delta              Float
+}
+
+// ─── Payment Schedule ────────────────────────────────────────────────────────
+
+model payment_schedule_items {
+  id           String    @id @default(cuid())
+  estimate_id  String
+  estimate     estimates @relation(fields: [estimate_id], references: [id], onDelete: Cascade)
+  sort_order   Int       @default(0)
+  label        String
+  amount_type  String    @default("FIXED") // FIXED | PERCENT
+  amount_value Float     @default(0)
+  due_trigger  String    @default("")
+  created_at   DateTime  @default(now())
+}
+
+// ─── Contract Signatures ─────────────────────────────────────────────────────
+
+model contract_signatures {
+  id             String    @id @default(cuid())
+  estimate_id    String    @unique
+  estimate       estimates @relation(fields: [estimate_id], references: [id], onDelete: Cascade)
+  signer_name    String
+  signature_data String    // base64 PNG
+  signed_at      DateTime  @default(now())
+}
+
+// ─── Change Orders ────────────────────────────────────────────────────────────
+
+model change_orders {
+  id            String                    @id @default(cuid())
+  estimate_id   String
+  estimate      estimates                 @relation(fields: [estimate_id], references: [id], onDelete: Cascade)
+  note          String?
+  created_at    DateTime                  @default(now())
+  new_our_total Float
+  new_ins_total Float
+  items         change_order_line_items[]
+}
+
+model change_order_line_items {
+  id               String        @id @default(cuid())
+  change_order_id  String
+  change_order     change_orders @relation(fields: [change_order_id], references: [id], onDelete: Cascade)
+  line_item_id     String
+  label            String
+  unit             String
+  qty_before       Float
+  qty_after        Float
+  our_per_unit     Float
+  our_amt_before   Float
+  our_amt_after    Float
+}
+
+// ─── Invoices ────────────────────────────────────────────────────────────────
+
+model invoices {
+  id          String        @id @default(cuid())
+  estimate_id String        @unique
+  estimate    estimates     @relation(fields: [estimate_id], references: [id])
+  invoice_no  String        @unique
+  amount_due  Float
+  amount_paid Float         @default(0)
+  status      InvoiceStatus @default(UNPAID)
+  notes       String?
+  issued_at   DateTime      @default(now())
+  due_at      DateTime?
+  paid_at     DateTime?
+  pdf_path             String?
+  stripe_session_id    String?
+  stripe_checkout_url  String?
+  payments             payments[]
+}
+
+model payments {
+  id           String    @id @default(cuid())
+  invoice_id   String
+  invoice      invoices  @relation(fields: [invoice_id], references: [id], onDelete: Cascade)
+  amount       Float
+  method       String    @default("CHECK") // CHECK | CASH | ZELLE | CREDIT_CARD | ACH | OTHER
+  reference_no String?
+  notes        String?
+  paid_at           DateTime  @default(now())
+  created_at        DateTime  @default(now())
+  stripe_payment_id String?
+}
+
+enum InvoiceStatus {
+  UNPAID
+  PARTIAL
+  PAID
+  VOID
+}
+
+// ─── Jobs ────────────────────────────────────────────────────────────────────
+
+model jobs {
+  id             String            @id @default(cuid())
+  customer_id    String
+  customer       customers         @relation(fields: [customer_id], references: [id])
+  estimate_id    String?
+  address        String
+  insurer        String?
+  claim_no       String?
+  squares        Float?
+  material       String?
+  shingle_color  String?
+  supplier       String?
+  status         JobStatus         @default(LEAD)
+  notes          String?
+  crew_name      String?
+  scheduled_date DateTime?
+  completed_date DateTime?
+  created_at     DateTime          @default(now())
+  updated_at     DateTime          @updatedAt
+  claim               insurance_claims?
+  photos              job_photos[]
+  review_request      review_requests?
+  inspection_reports  inspection_reports[]
+}
+
+enum JobStatus {
+  LEAD
+  ESTIMATE_SENT
+  INSURANCE_APPROVED
+  SCHEDULED
+  IN_PROGRESS
+  COMPLETE
+  INVOICED
+  PAID
+}
+
+// ─── Insurance Claims ────────────────────────────────────────────────────────
+
+model insurance_claims {
+  id                String      @id @default(cuid())
+  job_id            String      @unique
+  job               jobs        @relation(fields: [job_id], references: [id], onDelete: Cascade)
+  insurer           String?
+  claim_no          String?
+  adjuster_name     String?
+  adjuster_phone    String?
+  adjuster_email    String?
+  date_filed        DateTime?
+  deductible        Float?
+  acv_amount        Float?
+  rcv_amount        Float?
+  approved_amount   Float?
+  depreciation      Float?
+  supplement_no     String?
+  supplement_status String?
+  final_settlement  Float?
+  mortgage_company  String?
+  mortgage_loan_no  String?
+  status            ClaimStatus @default(FILED)
+  notes             String?
+  created_at        DateTime    @default(now())
+  updated_at        DateTime    @updatedAt
+}
+
+enum ClaimStatus {
+  FILED
+  ADJUSTER_ASSIGNED
+  INSPECTION_DONE
+  APPROVED
+  SUPPLEMENTED
+  CLOSED
+}
+
+// ─── Photos ──────────────────────────────────────────────────────────────────
+
+model job_photos {
+  id         String   @id @default(cuid())
+  job_id     String
+  job        jobs     @relation(fields: [job_id], references: [id], onDelete: Cascade)
+  url        String
+  type       String   @default("general")
+  caption    String?
+  created_at DateTime @default(now())
+}
+
+// ─── Review Requests ─────────────────────────────────────────────────────────
+
+model review_requests {
+  id          String    @id @default(cuid())
+  job_id      String    @unique
+  job         jobs      @relation(fields: [job_id], references: [id], onDelete: Cascade)
+  sent_via    String
+  sent_at     DateTime  @default(now())
+  opened_at   DateTime?
+  clicked_at  DateTime?
+  reviewed_at DateTime?
+}
+
+// ─── Outreach Templates ───────────────────────────────────────────────────────
+
+model outreach_templates {
+  id               String             @id @default(cuid())
+  slug             String             @unique
+  category         String             @default("roofing_outreach")
+  variant          String
+  subject          String
+  body             String
+  is_active        Boolean            @default(true)
+  variables        String[]           @default([])
+  created_at       DateTime           @default(now())
+  updated_at       DateTime           @updatedAt
+  outreach_history outreach_history[]
+}
+
+// ─── Storm Prospects ─────────────────────────────────────────────────────────
+
+model storm_prospects {
+  id                String             @id @default(cuid())
+  name              String?
+  address           String
+  city              String
+  neighborhood      String?
+  zip               String?
+  phone             String?
+  email             String?
+  damage_type       String             @default("hail")
+  source            String             @default("manual")
+  status            ProspectStatus     @default(NEW)
+  last_contacted_at DateTime?
+  notes             String?
+  created_at        DateTime           @default(now())
+  updated_at        DateTime           @updatedAt
+  outreach_history  outreach_history[]
+}
+
+enum ProspectStatus {
+  NEW
+  CONTACTED
+  NO_RESPONSE
+  INTERESTED
+  CONVERTED
+  DNC
+}
+
+// ─── Outreach History ────────────────────────────────────────────────────────
+
+model outreach_history {
+  id          String             @id @default(cuid())
+  prospect_id String
+  prospect    storm_prospects    @relation(fields: [prospect_id], references: [id], onDelete: Cascade)
+  template_id String?
+  template    outreach_templates? @relation(fields: [template_id], references: [id])
+  sent_at     DateTime           @default(now())
+  from_email  String
+  subject     String
+  status      String             @default("sent")
+  error_msg   String?
+}
+
+// ─── Outreach Scheduler ──────────────────────────────────────────────────────
+
+model outreach_scheduler_config {
+  id                   String    @id @default(cuid())
+  is_paused            Boolean   @default(false)
+  daily_cap            Int       @default(50)
+  contact_cooldown_days Int      @default(14)
+  template_slug        String?
+  last_run_at          DateTime?
+  last_run_sent        Int       @default(0)
+  last_run_failed      Int       @default(0)
+  last_run_skipped     Int       @default(0)
+  total_sent_alltime   Int       @default(0)
+  updated_at           DateTime  @updatedAt
+}
+
+model outreach_runs {
+  id           String   @id @default(cuid())
+  run_at       DateTime @default(now())
+  sent_count   Int      @default(0)
+  failed_count Int      @default(0)
+  skipped_count Int     @default(0)
+  duration_ms  Int?
+  triggered_by String   @default("cron")
+}
+
+// ─── Inspection Reports ───────────────────────────────────────────────────────
+
+model inspection_reports {
+  id              String               @id @default(cuid())
+  address         String
+  job_id          String?
+  job             jobs?                @relation(fields: [job_id], references: [id])
+  customer_id     String?
+  customer        customers?           @relation(fields: [customer_id], references: [id])
+  inspector       String?
+  inspection_date DateTime?
+  weather         String?
+  notes           String?
+  status          InspectionStatus     @default(DRAFT)
+  created_at      DateTime             @default(now())
+  updated_at      DateTime             @updatedAt
+  items           inspection_items[]
+  photos          inspection_photos[]
+}
+
+model inspection_items {
+  id         String              @id @default(cuid())
+  report_id  String
+  report     inspection_reports  @relation(fields: [report_id], references: [id], onDelete: Cascade)
+  section    String
+  damaged    Boolean             @default(false)
+  data       Json                @default("{}")
+  notes      String?
+  sort_order Int                 @default(0)
+  created_at DateTime            @default(now())
+  updated_at DateTime            @updatedAt
+
+  @@unique([report_id, section])
+}
+
+model inspection_photos {
+  id         String              @id @default(cuid())
+  report_id  String
+  report     inspection_reports  @relation(fields: [report_id], references: [id], onDelete: Cascade)
+  section    String
+  photo_data String              @db.Text
+  caption    String?
+  created_at DateTime            @default(now())
+}
+
+enum InspectionStatus {
+  DRAFT
+  COMPLETE
+}
+
+// ─── Manufacturer Docs ────────────────────────────────────────────────────────
+
+model manufacturer_docs {
+  id           String   @id @default(cuid())
+  manufacturer String
+  name         String
+  filename     String   @unique
+  description  String?
+  size_bytes   Int      @default(0)
+  active       Boolean  @default(true)
+  created_at   DateTime @default(now())
+  updated_at   DateTime @updatedAt
+}
+
+// ─── EagleView Reports ────────────────────────────────────────────────────────
+
+model ev_reports {
+  id           String    @id @default(cuid())
+  estimate_id  String?
+  estimate     estimates? @relation(fields: [estimate_id], references: [id], onDelete: SetNull)
+  ref_id       String    @unique  // our reference passed to EV (cuid)
+  ev_report_id Int?      @unique  // EagleView's ReportId
+  ev_order_id  Int?                // EagleView's OrderId
+  product_id   Int?                // EV product used
+  product_name String?
+  address      String
+  status       String    @default("pending")  // pending | processing | complete | failed
+  measurements Json?     // EvReportMeasurements when complete
+  pdf_url      String?
+  created_at   DateTime  @default(now())
+  updated_at   DateTime  @updatedAt
+}
+
+// ─── Material Orders ──────────────────────────────────────────────────────────
+
+model material_orders {
+  id          String    @id @default(cuid())
+  estimate_id String    @unique
+  estimate    estimates @relation(fields: [estimate_id], references: [id], onDelete: Cascade)
+  brand       String    @default("")
+  items       Json      @default("[]")
+  notes       String?
+  created_at  DateTime  @default(now())
+  updated_at  DateTime  @updatedAt
+}
+
+// ─── Manual Invoices ──────────────────────────────────────────────────────────
+
+model manual_invoices {
+  id               String        @id @default(cuid())
+  invoice_no       String        @unique
+  customer_name    String
+  customer_phone   String?
+  customer_email   String?
+  customer_address String?
+  property_address String?
+  insurer          String?
+  claim_no         String?
+  notes            String?
+  payment_terms    String?       @default("Payment due within 30 days of invoice date.")
+  amount_due       Float
+  amount_paid      Float         @default(0)
+  status           InvoiceStatus @default(UNPAID)
+  issued_at        DateTime      @default(now())
+  due_at           DateTime?
+  paid_at          DateTime?
+  created_at       DateTime      @default(now())
+  updated_at       DateTime      @updatedAt
+  line_items       manual_invoice_items[]
+  payments         manual_payments[]
+}
+
+model manual_invoice_items {
+  id          String          @id @default(cuid())
+  invoice_id  String
+  invoice     manual_invoices @relation(fields: [invoice_id], references: [id], onDelete: Cascade)
+  description String
+  qty         Float           @default(1)
+  unit        String?
+  unit_price  Float
+  amount      Float
+  sort_order  Int             @default(0)
+}
+
+model manual_payments {
+  id           String          @id @default(cuid())
+  invoice_id   String
+  invoice      manual_invoices @relation(fields: [invoice_id], references: [id], onDelete: Cascade)
+  amount       Float
+  method       String          @default("CHECK")
+  reference_no String?
+  notes        String?
+  paid_at      DateTime        @default(now())
+  created_at   DateTime        @default(now())
+}
+
+// ─── Job Costs (P&L) ──────────────────────────────────────────────────────────
+
+model job_costs {
+  id          String    @id @default(cuid())
+  estimate_id String
+  estimate    estimates @relation(fields: [estimate_id], references: [id], onDelete: Cascade)
+  category    String    // materials | labor | subs | equipment | permits | eagleview | marketing | other
+  description String
+  amount      Float
+  created_at  DateTime  @default(now())
+  updated_at  DateTime  @updatedAt
+}
+
+// ─── Business Directory (Cold Outreach) ───────────────────────────────────────
+
+model business_directory {
+  id                String    @id
+  name              String
+  category          String?
+  address           String?
+  city              String?
+  zip               String?
+  phone             String?
+  email             String?
+  website           String?
+  rating            Float?
+  review_count      Int       @default(0)
+  source            String    @default("dfw_business_db")
+  status            String    @default("NEW")
+  last_contacted_at DateTime?
+  notes             String?
+  created_at        DateTime  @default(now())
+  updated_at        DateTime  @updatedAt
+}
+
+// ─── Subcontractors ──────────────────────────────────────────────────────────
+
+model subcontractors {
+  id              String                @id @default(cuid())
+  name            String
+  company         String?
+  trade           String?               // electrician, plumber, roofer, painter, etc.
+  phone           String?
+  email           String?
+  address         String?
+  city            String?
+  state           String                @default("TX")
+  tax_id          String?               // SSN or EIN for 1099
+  insurance_exp   DateTime?
+  license_no      String?
+  hourly_rate     Float?
+  status          String                @default("active")  // active, inactive, suspended
+  notes           String?
+  total_paid      Float                 @default(0)
+  created_at      DateTime              @default(now())
+  updated_at      DateTime              @updatedAt
+  documents       subcontractor_documents[]
+  expenses        expenses[]
+}
+
+model subcontractor_documents {
+  id                String          @id @default(cuid())
+  subcontractor_id  String
+  subcontractor     subcontractors  @relation(fields: [subcontractor_id], references: [id], onDelete: Cascade)
+  doc_type          String          // w9, insurance_cert, id, license, contract, other
+  display_name      String
+  filename          String
+  file_path         String
+  file_data         String?         @db.Text  // base64 for small docs
+  size_bytes        Int             @default(0)
+  expires_at        DateTime?
+  uploaded_at       DateTime        @default(now())
+}
+
+// ─── Expenses (General Business) ─────────────────────────────────────────────
+
+model expenses {
+  id                String          @id @default(cuid())
+  date              DateTime
+  category          String          // vehicle_fuel, tools_equipment, insurance, office_rent, marketing, subscriptions, materials, subcontractor, payroll, taxes, utilities, meals, travel, misc
+  description       String
+  amount            Float
+  vendor            String?
+  payment_method    String?         // check, cash, card, ach, zelle
+  reference_no      String?
+  receipt_url       String?
+  receipt_data      String?         @db.Text  // base64 receipt image
+  subcontractor_id  String?
+  subcontractor     subcontractors? @relation(fields: [subcontractor_id], references: [id])
+  is_recurring      Boolean         @default(false)
+  recurring_freq    String?         // monthly, quarterly, annual
+  is_tax_deductible Boolean         @default(true)
+  notes             String?
+  created_at        DateTime        @default(now())
+  updated_at        DateTime        @updatedAt
+}
+
+// ─── Mileage Log ─────────────────────────────────────────────────────────────
+
+model mileage_log {
+  id              String    @id @default(cuid())
+  date            DateTime
+  from_location   String
+  to_location     String
+  miles           Float
+  purpose         String    // job_site, material_pickup, client_meeting, office, other
+  job_address     String?
+  irs_rate        Float     @default(0.70)  // 2025 IRS rate
+  deduction       Float     @default(0)     // miles * irs_rate
+  notes           String?
+  created_at      DateTime  @default(now())
+}
+
+// ─── Recurring Expense Templates ─────────────────────────────────────────────
+
+model recurring_expenses {
+  id              String    @id @default(cuid())
+  category        String
+  description     String
+  amount          Float
+  vendor          String?
+  frequency       String    // monthly, quarterly, annual
+  next_due        DateTime
+  is_active       Boolean   @default(true)
+  auto_log        Boolean   @default(false)
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+}
+
+// ─── Document Packets ─────────────────────────────────────────────────────────
+
+model document_packets {
+  id           String   @id @default(cuid())
+  name         String
+  doc_type     String   // pre_project | post_project
+  category     String   @default("general") // agreement, license, insurance, warranty, certificate, guide, inspection, other
+  filename     String
+  display_name String
+  file_data    String?  @db.Text // base64 encoded
+  size_bytes   Int      @default(0)
+  is_default   Boolean  @default(false) // auto-selected when creating packet
+  active       Boolean  @default(true)
+  sort_order   Int      @default(0)
+  created_at   DateTime @default(now())
+  updated_at   DateTime @updatedAt
+
+  @@index([doc_type])
+}
+
+model estimate_packet_sends {
+  id          String   @id @default(cuid())
+  estimate_id String
+  packet_type String   // pre_project | post_project
+  doc_ids     String[] @default([])
+  sent_to     String
+  sent_at     DateTime @default(now())
+}
