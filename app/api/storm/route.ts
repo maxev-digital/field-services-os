@@ -1,12 +1,15 @@
 /**
- * Admin Storm Dashboard API
- * Proxies NOAA SPC storm reports + NOAA SWDI radar hail data server-side.
- * Filters for DFW-area events: TX state, lat 31.5–34.5, lon -99.5 to -94.
+ * Public Storm API — no auth, CORS enabled for roofworksoftexas.com
+ * Mirrors /api/admin/storm/route.ts logic exactly, minus requireAdmin().
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAdmin } from '@/lib/admin-auth';
 
-// DFW bbox — used only for SWDI radar query and DFW county detection
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': 'https://roofworksoftexas.com',
+  'Access-Control-Allow-Methods': 'GET, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
+};
+
 const DFW_LAT_MIN = 31.5, DFW_LAT_MAX = 34.5;
 const DFW_LON_MIN = -99.5, DFW_LON_MAX = -94.0;
 
@@ -58,20 +61,17 @@ function parseSpcCsv(text: string, type: 'hail' | 'wind' | 'torn') {
   });
 }
 
-// Fetch SWDI radar hail data — more complete than SPC observer reports
 async function fetchSwdiHail(dateYYYYMMDD: string): Promise<any[]> {
   try {
-    // Full CONUS bbox — polygons generated client-side for wherever storms actually hit
     const url = `https://www.ncei.noaa.gov/swdiws/csv/nx3hail/${dateYYYYMMDD}:${dateYYYYMMDD}?bbox=-130,20,-60,55&limit=10000`;
     const res = await fetch(url, {
-      headers: { 'User-Agent': 'RoofWorksAdmin/1.0' },
+      headers: { 'User-Agent': 'RoofWorksPublic/1.0' },
       signal: AbortSignal.timeout(10000),
     });
     if (!res.ok) return [];
     const text = await res.text();
     const lines = text.split('\n').filter(l => !l.startsWith('#') && l.trim());
     if (lines.length < 2) return [];
-    // Fields: ZTIME, LON, LAT, WSR_ID, CELL_ID, RANGE, AZIMUTH, SEVPROB, PROB, MAXSIZE
     return lines.slice(1).flatMap(line => {
       const c = line.split(',');
       if (c.length < 10) return [];
@@ -87,7 +87,7 @@ async function fetchSwdiHail(dateYYYYMMDD: string): Promise<any[]> {
         cell_id: c[4]?.trim(),
         sevprob: parseInt(c[7], 10) || 0,
         prob,
-        maxSize, // inches
+        maxSize,
         time: c[0]?.trim(),
       }];
     });
@@ -96,15 +96,16 @@ async function fetchSwdiHail(dateYYYYMMDD: string): Promise<any[]> {
   }
 }
 
+export async function OPTIONS() {
+  return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
+}
+
 export async function GET(req: NextRequest) {
   try {
-    await requireAdmin();
-
     const { searchParams } = new URL(req.url);
     const type = (searchParams.get('type') || 'hail') as 'hail' | 'wind' | 'torn';
-    const dateRaw = searchParams.get('date'); // may be YYMMDD or YYYYMMDD from date picker
+    const dateRaw = searchParams.get('date');
 
-    // Normalize: date picker sends YYYYMMDD (8), SPC needs YYMMDD (6)
     const dateArg = dateRaw && dateRaw.length === 8 ? dateRaw.slice(2) : dateRaw;
     const dateArgFull = dateRaw && dateRaw.length === 6 ? `20${dateRaw}` : dateRaw;
 
@@ -119,7 +120,7 @@ export async function GET(req: NextRequest) {
       const url = `${SPC_BASE}${d}_rpts_filtered_${type}.csv`;
       try {
         const res = await fetch(url, {
-          headers: { 'User-Agent': 'RoofWorksAdmin/1.0' },
+          headers: { 'User-Agent': 'RoofWorksPublic/1.0' },
           signal: AbortSignal.timeout(8000),
         });
         if (!res.ok) continue;
@@ -129,7 +130,6 @@ export async function GET(req: NextRequest) {
       } catch { continue; }
     }
 
-    // Resolve full dates for SWDI
     if (usedDate) {
       usedDateFull = `20${usedDate}`;
     } else if (dateArgFull) {
@@ -154,7 +154,6 @@ export async function GET(req: NextRequest) {
       if (type === 'wind' && (g.maxSpeed === undefined || e.speed > g.maxSpeed)) g.maxSpeed = e.speed;
     }
 
-    // Fetch SWDI radar hail points for polygon generation (hail only)
     let swdiPoints: any[] = [];
     if (type === 'hail') {
       swdiPoints = await fetchSwdiHail(usedDateFull);
@@ -169,10 +168,9 @@ export async function GET(req: NextRequest) {
       dfwTotal: dfwEvents.length,
       events,
       byCounty: Array.from(byCounty.values()).sort((a, b) => b.count - a.count),
-      swdiPoints, // radar hail points for DFW polygon generation
-    });
+      swdiPoints,
+    }, { headers: CORS_HEADERS });
   } catch (error: any) {
-    if (error.message === 'Unauthorized') return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ error: error.message }, { status: 500, headers: CORS_HEADERS });
   }
 }

@@ -728,3 +728,23 @@ model estimate_packet_sends {
   sent_to     String
   sent_at     DateTime @default(now())
 }
+
+// ─── Storm History ─────────────────────────────────────────────────────────────
+
+model storm_history {
+  id           Int      @id @default(autoincrement())
+  date         String   @unique // YYYYMMDD
+  hail_count   Int      @default(0)
+  wind_count   Int      @default(0)
+  torn_count   Int      @default(0)
+  dfw_hail     Int      @default(0)
+  dfw_wind     Int      @default(0)
+  dfw_torn     Int      @default(0)
+  max_hail     Int?     // hundredths of inches
+  states_hail  String?  // JSON array of 2-letter state codes
+  states_torn  String?  // JSON array of 2-letter state codes
+  has_dfw_hail Boolean  @default(false)
+  has_dfw_torn Boolean  @default(false)
+  created_at   DateTime @default(now())
+  updated_at   DateTime @updatedAt
+}

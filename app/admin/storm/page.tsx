@@ -80,7 +80,25 @@ const HAIL_THRESHOLDS = [
 ];
 
 const DFW_COUNTIES = ['Dallas','Collin','Denton','Tarrant','Rockwall','Kaufman','Johnson','Ellis','Parker','Wise'];
-const CONUS_CENTER: [number, number] = [-96.5, 38.5];
+const DFW_CENTER: [number, number] = [-97.0, 32.8];
+const DFW_ZOOM = 6.5;
+
+const BASEMAP_STYLES: Record<string, any> = {
+  dark: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+  streets: 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
+  satellite: {
+    version: 8,
+    name: 'Satellite',
+    sources: {
+      'esri-sat': { type: 'raster', tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'], tileSize: 256, attribution: '© ESRI World Imagery' },
+      'esri-labels': { type: 'raster', tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}'], tileSize: 256 },
+    },
+    layers: [
+      { id: 'sat-bg', type: 'raster', source: 'esri-sat' },
+      { id: 'sat-labels', type: 'raster', source: 'esri-labels', paint: { 'raster-opacity': 0.85 } },
+    ],
+  },
+};
 
 function fmtDate(d: string) {
   if (!d || d.length !== 6) return d;
@@ -106,23 +124,36 @@ function hailLabel(s: number) {
   return 'MODERATE';
 }
 
-function buildHailPolygons(swdiPoints: SwdiPoint[]): FeatureCollection {
-  const features: Feature[] = [];
-  for (const threshold of HAIL_THRESHOLDS) {
-    const pts = swdiPoints.filter(p => p.maxSize >= threshold.min && p.prob >= 30);
-    if (pts.length < 4) continue;
-    const fc = turf.featureCollection(pts.map(p => turf.point([p.lon, p.lat])));
-    let hull: Feature<Polygon | MultiPolygon> | null = null;
-    for (const maxEdge of [0.12, 0.18, 0.25, 0.35]) {
-      try { const c = turf.concave(fc, { maxEdge, units: 'degrees' }); if (c) { hull = c; break; } } catch {}
-    }
-    if (!hull) { try { hull = turf.convex(fc); } catch { continue; } }
-    if (!hull) continue;
-    try {
-      const buffered = turf.buffer(hull, 0.8, { units: 'kilometers' });
-      if (buffered) features.push({ ...buffered, properties: { threshold: threshold.min, label: threshold.label, color: threshold.color, fill: threshold.fill } });
-    } catch {}
-  }
+// Render each SWDI radar cell as a proper ~1km grid square colored by actual max hail size.
+// Far more accurate than hull approximations — matches actual radar footprint.
+function buildHailGrid(swdiPoints: SwdiPoint[]): FeatureCollection {
+  const CELL = 0.009; // ~1km half-size in degrees at 32°N
+  const features: Feature[] = swdiPoints
+    .filter(p => p.maxSize >= 0.5 && p.prob >= 10)
+    .map(p => {
+      const sz = p.maxSize;
+      let color = '#00ff00';
+      let fill = 'rgba(0,255,0,0.35)';
+      if (sz >= 3.0) { color = '#ff00ff'; fill = 'rgba(255,0,255,0.55)'; }
+      else if (sz >= 2.0) { color = '#ff0000'; fill = 'rgba(255,0,0,0.50)'; }
+      else if (sz >= 1.5) { color = '#ff6600'; fill = 'rgba(255,102,0,0.48)'; }
+      else if (sz >= 1.0) { color = '#ffcc00'; fill = 'rgba(255,204,0,0.45)'; }
+      else if (sz >= 0.75) { color = '#aaff00'; fill = 'rgba(170,255,0,0.38)'; }
+      return {
+        type: 'Feature' as const,
+        geometry: {
+          type: 'Polygon' as const,
+          coordinates: [[
+            [p.lon - CELL, p.lat - CELL],
+            [p.lon + CELL, p.lat - CELL],
+            [p.lon + CELL, p.lat + CELL],
+            [p.lon - CELL, p.lat + CELL],
+            [p.lon - CELL, p.lat - CELL],
+          ]],
+        },
+        properties: { maxSize: sz, prob: p.prob, color, fill, lon: p.lon, lat: p.lat },
+      };
+    });
   return turf.featureCollection(features);
 }
 
@@ -158,6 +189,9 @@ export default function StormDashboardPage() {
   const mapRef = useRef<any>(null);
   const [forecastData, setForecastData] = useState<ForecastData | null>(null);
   const [forecastLoading, setForecastLoading] = useState(false);
+  const [basemap, setBasemap] = useState<'dark' | 'satellite' | 'streets'>('dark');
+  const [showMesh, setShowMesh] = useState(false);
+  const [showSwdiGrid, setShowSwdiGrid] = useState(true);
   const forecastFetchedRef = useRef(false);
 
   const loadForecast = useCallback(async () => {
@@ -210,7 +244,7 @@ export default function StormDashboardPage() {
     setTimeout(() => setCopied(null), 2000);
   };
 
-  const hailPolygons = data?.swdiPoints?.length ? buildHailPolygons(data.swdiPoints) : null;
+  const hailGrid = data?.swdiPoints?.length ? buildHailGrid(data.swdiPoints) : null;
   const eventPoints  = data?.events?.length ? buildEventGeoJSON(data.events, type) : null;
 
   const dfwHits   = data?.byCounty.filter(c => DFW_COUNTIES.includes(c.county)) ?? [];
@@ -349,10 +383,10 @@ export default function StormDashboardPage() {
 
               <Map
                 ref={mapRef}
-                initialViewState={{ longitude: CONUS_CENTER[0], latitude: CONUS_CENTER[1], zoom: 4 }}
+                initialViewState={{ longitude: DFW_CENTER[0], latitude: DFW_CENTER[1], zoom: DFW_ZOOM }}
                 style={{ width: '100%', height: '100%' }}
-                mapStyle="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json"
-                interactiveLayerIds={['spc-events-circle']}
+                mapStyle={BASEMAP_STYLES[basemap]}
+                interactiveLayerIds={['spc-events-circle', 'swdi-grid-fill']}
                 onClick={e => {
                   if (e.features && e.features.length > 0)
                     setPopupInfo({ lon: e.lngLat.lng, lat: e.lngLat.lat, props: e.features[0].properties });
@@ -365,25 +399,39 @@ export default function StormDashboardPage() {
                 {/* IEM NEXRAD radar */}
                 {showRadar && (
                   <Source type="raster" tiles={[radarTileUrl]} tileSize={256}>
-                    <Layer id="radar-layer" type="raster" paint={{ 'raster-opacity': 0.5 }} />
+                    <Layer id="radar-layer" type="raster" paint={{ 'raster-opacity': basemap === 'satellite' ? 0.35 : 0.5 }} />
                   </Source>
                 )}
 
-                {/* DFW hail swath polygons */}
-                {showPolygons && hailPolygons && hailPolygons.features.length > 0 && (() => {
-                  const layers = HAIL_THRESHOLDS.map(t => {
-                    const id = `swath-fill-${t.min}`.replace('.', '-');
-                    const filtered: FeatureCollection = { type: 'FeatureCollection', features: hailPolygons.features.filter(f => f.properties?.threshold === t.min) };
-                    if (!filtered.features.length) return null;
-                    return (
-                      <Source key={id} id={`src-${id}`} type="geojson" data={filtered}>
-                        <Layer id={id} type="fill" paint={{ 'fill-color': t.fill, 'fill-outline-color': t.color }} />
-                        <Layer id={`${id}-line`} type="line" paint={{ 'line-color': t.color, 'line-width': 2, 'line-opacity': 0.9 }} />
-                      </Source>
-                    );
-                  });
-                  return <>{layers}</>;
-                })()}
+                {/* MRMS MESH — radar-derived max hail size (Iowa State, current) */}
+                {showMesh && (
+                  <Source type="raster" tiles={[`https://mesonet.agron.iastate.edu/cgi-bin/wms/nexrad/mrms.cgi?SERVICE=WMS&REQUEST=GetMap&VERSION=1.1.1&LAYERS=mrms_mesh&STYLES=&FORMAT=image/png&BGCOLOR=0x000000&TRANSPARENT=TRUE&SRS=EPSG:4326&BBOX={bbox-epsg-4326}&WIDTH=256&HEIGHT=256`]} tileSize={256}>
+                    <Layer id="mesh-layer" type="raster" paint={{ 'raster-opacity': 0.7 }} />
+                  </Source>
+                )}
+
+                {/* SWDI radar hail grid — each cell = ~1km actual radar footprint, colored by max hail size */}
+                {showSwdiGrid && hailGrid && hailGrid.features.length > 0 && (
+                  <Source id="swdi-grid" type="geojson" data={hailGrid}>
+                    <Layer
+                      id="swdi-grid-fill"
+                      type="fill"
+                      paint={{
+                        'fill-color': ['coalesce', ['get', 'fill'], 'rgba(0,255,0,0.3)'],
+                        'fill-opacity': ['interpolate', ['linear'], ['get', 'prob'], 10, 0.35, 50, 0.6, 90, 0.85],
+                      }}
+                    />
+                    <Layer
+                      id="swdi-grid-outline"
+                      type="line"
+                      paint={{
+                        'line-color': ['coalesce', ['get', 'color'], '#00ff00'],
+                        'line-width': 0.5,
+                        'line-opacity': 0.5,
+                      }}
+                    />
+                  </Source>
+                )}
 
                 {/* SPC report points — all US */}
                 {showPoints && eventPoints && eventPoints.features.length > 0 && (
@@ -413,14 +461,30 @@ export default function StormDashboardPage() {
                 {/* Popup */}
                 {popupInfo && (
                   <Popup longitude={popupInfo.lon} latitude={popupInfo.lat} anchor="bottom" onClose={() => setPopupInfo(null)} closeButton>
-                    <div className="text-xs text-gray-900 p-1 min-w-[150px]">
-                      {popupInfo.props.sizeIn && <div className="font-bold text-sm">{popupInfo.props.sizeIn}" Hail</div>}
-                      {popupInfo.props.speed != null && popupInfo.props.speed > 0 && <div className="font-bold text-sm">{popupInfo.props.speed} mph Wind</div>}
-                      {popupInfo.props.ef && <div className="font-bold text-sm">{popupInfo.props.ef} Tornado</div>}
+                    <div className="text-xs text-gray-900 p-1 min-w-[160px]">
+                      {/* SPC observer report */}
+                      {popupInfo.props.sizeIn && <div className="font-bold text-sm">🟡 {popupInfo.props.sizeIn}" Hail (Observer)</div>}
+                      {popupInfo.props.speed != null && popupInfo.props.speed > 0 && <div className="font-bold text-sm">💨 {popupInfo.props.speed} mph Wind</div>}
+                      {popupInfo.props.ef && <div className="font-bold text-sm">🌪 {popupInfo.props.ef} Tornado</div>}
                       {popupInfo.props.location && <div className="text-gray-600 mt-0.5">{popupInfo.props.location}</div>}
                       {popupInfo.props.county && <div className="text-gray-500">{popupInfo.props.county} Co., {popupInfo.props.state}</div>}
                       {popupInfo.props.time && <div className="text-gray-500 mt-0.5">{popupInfo.props.time} UTC</div>}
                       {popupInfo.props.inDfw && <div className="text-red-600 font-semibold mt-1">⚠ DFW Area</div>}
+                      {/* SWDI radar grid cell */}
+                      {popupInfo.props.maxSize != null && !popupInfo.props.sizeIn && (
+                        <>
+                          <div className="font-bold text-sm">📡 Radar: {popupInfo.props.maxSize.toFixed(2)}" max hail</div>
+                          <div className="text-gray-500 mt-0.5">Detection probability: {popupInfo.props.prob}%</div>
+                          <div className="text-gray-500">~1km radar grid cell</div>
+                          <a
+                            href={`https://www.google.com/maps/search/?api=1&query=${popupInfo.lat},${popupInfo.lon}`}
+                            target="_blank" rel="noopener noreferrer"
+                            className="block mt-2 text-center text-xs font-semibold text-blue-700 bg-blue-50 rounded px-2 py-1 hover:bg-blue-100"
+                          >
+                            Open in Google Maps →
+                          </a>
+                        </>
+                      )}
                     </div>
                   </Popup>
                 )}
@@ -432,10 +496,20 @@ export default function StormDashboardPage() {
                   <div className="text-xs font-semibold text-gray-400 mb-2 flex items-center gap-1">
                     <Layers className="w-3 h-3" /> Layers
                   </div>
+                  {/* Basemap selector */}
+                  <div className="flex gap-1 mb-2">
+                    {(['dark', 'satellite', 'streets'] as const).map(b => (
+                      <button key={b} onClick={() => setBasemap(b)}
+                        className={`flex-1 text-center text-xs py-0.5 rounded transition-colors border ${basemap === b ? 'bg-blue-700 border-blue-500 text-white font-bold' : 'bg-gray-800 border-gray-600 text-gray-400'}`}>
+                        {b === 'dark' ? '🌑' : b === 'satellite' ? '🛰' : '🗺'}
+                      </button>
+                    ))}
+                  </div>
                   {[
-                    { key: 'radar', label: 'Live Radar', state: showRadar, set: setShowRadar },
-                    { key: 'poly',  label: 'DFW Swath',  state: showPolygons, set: setShowPolygons },
-                    { key: 'pts',   label: 'SPC Reports', state: showPoints, set: setShowPoints },
+                    { key: 'radar', label: 'NEXRAD Radar', state: showRadar,    set: setShowRadar },
+                    { key: 'mesh',  label: 'MRMS MESH',    state: showMesh,     set: setShowMesh },
+                    { key: 'grid',  label: 'SWDI Grid',    state: showSwdiGrid, set: setShowSwdiGrid },
+                    { key: 'pts',   label: 'SPC Reports',  state: showPoints,   set: setShowPoints },
                   ].map(l => (
                     <button key={l.key} onClick={() => l.set(!l.state)}
                       className={`flex items-center gap-1.5 w-full text-left text-xs py-0.5 transition-colors ${l.state ? 'text-white' : 'text-gray-500'}`}>
