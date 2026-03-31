@@ -17,6 +17,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { notifyNewEstimate, notifyEstimateCustomer } from '@/lib/notify';
+import { notifyNewEstimate as tgNotifyEstimate } from '@/lib/telegram-notify';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin':  '*',
@@ -107,9 +108,9 @@ export async function POST(req: NextRequest) {
 
     // ── Calculate totals (trust payload values; recalculate as fallback) ──
     const insuranceTotal = totals?.insuranceTotal
-      ?? normalisedItems.reduce((s, i) => s + i.insAmt, 0);
+      ?? normalisedItems.reduce((s: number, i: any) => s + i.insAmt, 0);
     const ourTotal = totals?.ourTotal
-      ?? normalisedItems.reduce((s, i) => s + i.ourAmt, 0);
+      ?? normalisedItems.reduce((s: number, i: any) => s + i.ourAmt, 0);
     const savings    = insuranceTotal - ourTotal;
     const savingsPct = insuranceTotal > 0 ? (savings / insuranceTotal) * 100 : 0;
 
@@ -142,6 +143,43 @@ export async function POST(req: NextRequest) {
         },
       },
     });
+
+    // ── Auto-create job in LEAD status from estimate submission ──────────
+    try {
+      const existingJob = await prisma.jobs.findFirst({
+        where: { customer_id: customer.id, address: project.address },
+      });
+      if (!existingJob) {
+        await prisma.jobs.create({
+          data: {
+            customer_id: customer.id,
+            estimate_id: estimate.id,
+            address: project.address,
+            insurer: project.insurer || null,
+            claim_no: project.claimNo || null,
+            status: 'LEAD',
+            notes: 'Auto-created from online estimate submission',
+          },
+        });
+      }
+    } catch (jobErr: any) {
+      console.error('[estimates] Failed to auto-create job:', jobErr.message);
+    }
+
+    // ── Insert admin notification for new estimate ────────────────────────
+    try {
+      await prisma.$executeRaw`
+        INSERT INTO admin_notifications (id, type, title, message, data)
+        VALUES (
+          gen_random_uuid()::text,
+          'new_estimate',
+          ${'New Estimate — ' + contact.name},
+          ${'$' + ourTotal.toFixed(0) + ' estimate from ' + contact.name + ' at ' + project.address},
+          ${JSON.stringify({ estimateId: estimate.id, customerName: contact.name, total: ourTotal, address: project.address })}::jsonb
+        )`;
+    } catch (e: any) {
+      console.error('[estimates] Failed to insert notification:', e.message);
+    }
 
     // ── Auto-create storm_prospect so outreach system can follow up ──────
     const existingProspect = await prisma.storm_prospects.findFirst({
@@ -211,6 +249,9 @@ export async function POST(req: NextRequest) {
         delta:    i.delta,
       })),
     });
+
+    // Telegram push notification
+    tgNotifyEstimate(contact.name, project.address, ourTotal, contact.phone).catch(() => {});
 
     return NextResponse.json(
       { success: true, estimateId: estimate.id, message: "We'll be in touch shortly." },

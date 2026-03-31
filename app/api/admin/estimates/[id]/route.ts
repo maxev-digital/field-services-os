@@ -35,6 +35,29 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     if (body.status === 'APPROVED' && !data.approved_at) data.approved_at = new Date();
 
     const estimate = await prisma.estimates.update({ where: { id: params.id }, data });
+
+    // ── Auto-advance linked job when estimate status changes ─────────
+    if (body.status) {
+      const jobStatusMap: Record<string, string> = {
+        'SENT': 'ESTIMATE_SENT',
+        'APPROVED': 'INSURANCE_APPROVED',
+        'INVOICED': 'INVOICED',
+        'PAID': 'PAID',
+      };
+      const newJobStatus = jobStatusMap[body.status];
+      if (newJobStatus) {
+        // Find job linked to this estimate (by estimate_id or customer+address)
+        const linkedJob = await prisma.jobs.findFirst({
+          where: { estimate_id: params.id },
+        });
+        if (linkedJob) {
+          await prisma.jobs.update({
+            where: { id: linkedJob.id },
+            data: { status: newJobStatus as any },
+          }).catch(() => {});
+        }
+      }
+    }
     return NextResponse.json({ estimate });
   } catch (error: any) {
     if (error.message === 'Unauthorized') return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });

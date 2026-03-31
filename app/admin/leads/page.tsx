@@ -1,18 +1,21 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Users, Phone, Mail, MapPin, FileText, Clock } from 'lucide-react';
+import { Users, Phone, Mail, MapPin, FileText, Clock, UserPlus } from 'lucide-react';
 
 interface Lead {
   id: string;
+  type: 'estimate' | 'prospect';
   address: string;
   insurer: string | null;
   claim_no: string | null;
   our_total: number;
   insurance_total: number;
-  status: 'DRAFT' | 'SENT';
+  status: string;
   created_at: string;
   customer: { id: string; name: string; phone: string; email: string | null };
+  source?: string;
+  notes?: string | null;
 }
 
 function fmt(n: number) { return `$${n.toLocaleString(undefined, { minimumFractionDigits: 0 })}`; }
@@ -26,7 +29,10 @@ function fmtDate(d: string) {
 export default function LeadsPage() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [total, setTotal] = useState(0);
+  const [estimateCount, setEstimateCount] = useState(0);
+  const [prospectCount, setProspectCount] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [converting, setConverting] = useState<string | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -34,6 +40,8 @@ export default function LeadsPage() {
     const data = await res.json();
     setLeads(data.leads || []);
     setTotal(data.total || 0);
+    setEstimateCount(data.estimate_count || 0);
+    setProspectCount(data.prospect_count || 0);
     setLoading(false);
   };
 
@@ -48,8 +56,25 @@ export default function LeadsPage() {
     load();
   };
 
-  const draftLeads = leads.filter(l => l.status === 'DRAFT');
-  const sentLeads  = leads.filter(l => l.status === 'SENT');
+  const convertProspect = async (id: string) => {
+    setConverting(id);
+    try {
+      await fetch('/api/admin/prospects/convert', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prospect_ids: [id] }),
+      });
+      load();
+    } finally {
+      setConverting(null);
+    }
+  };
+
+  const estimateLeads = leads.filter(l => l.type === 'estimate');
+  const prospectLeads = leads.filter(l => l.type === 'prospect');
+  const draftLeads = estimateLeads.filter(l => l.status === 'DRAFT');
+  const sentLeads  = estimateLeads.filter(l => l.status === 'SENT');
+  const pipelineValue = estimateLeads.reduce((s, l) => s + l.our_total, 0);
 
   return (
     <div className="p-6 max-w-6xl mx-auto">
@@ -57,17 +82,18 @@ export default function LeadsPage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-white">Leads</h1>
-          <p className="text-gray-400 text-sm mt-1">{total} unconverted estimates needing follow-up</p>
+          <p className="text-gray-400 text-sm mt-1">{total} leads needing follow-up</p>
         </div>
       </div>
 
       {/* Summary */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
         {[
-          { label: 'Total Leads',    value: total,                    color: 'text-white' },
-          { label: 'New (Draft)',    value: draftLeads.length,        color: 'text-blue-400' },
-          { label: 'Sent / Pending',value: sentLeads.length,         color: 'text-yellow-400' },
-          { label: 'Pipeline Value', value: fmt(leads.reduce((s, l) => s + l.our_total, 0)), color: 'text-green-400' },
+          { label: 'Total Leads',      value: total,                 color: 'text-white' },
+          { label: 'Estimates (Draft)', value: draftLeads.length,     color: 'text-blue-400' },
+          { label: 'Estimates (Sent)',  value: sentLeads.length,      color: 'text-yellow-400' },
+          { label: 'Storm Prospects',   value: prospectCount,         color: 'text-orange-400' },
+          { label: 'Pipeline Value',    value: fmt(pipelineValue),    color: 'text-green-400' },
         ].map(({ label, value, color }) => (
           <div key={label} className="bg-gray-800 border border-gray-700 rounded-xl p-4">
             <div className="text-xs text-gray-400 mb-1">{label}</div>
@@ -76,12 +102,71 @@ export default function LeadsPage() {
         ))}
       </div>
 
+      {/* Storm Prospect Leads (INTERESTED but not yet converted) */}
+      {prospectLeads.length > 0 && (
+        <div className="mb-6">
+          <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3 flex items-center gap-1.5">
+            <UserPlus className="w-3.5 h-3.5 text-orange-400" />
+            <span className="text-orange-400">Storm Prospects — Interested (Not Yet Converted)</span>
+          </h2>
+          <div className="space-y-2">
+            {prospectLeads.map(lead => (
+              <div key={lead.id} className="bg-gray-800 border border-orange-900/30 rounded-xl p-4 hover:border-orange-700/50 transition-colors">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-3 mb-2">
+                      <span className="font-semibold text-white">{lead.customer.name}</span>
+                      <span className="px-2 py-0.5 text-[10px] font-bold uppercase rounded-full bg-orange-900/50 text-orange-300 border border-orange-700/50">Storm Lead</span>
+                      <span className="text-xs text-gray-500">{fmtDate(lead.created_at)}</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-gray-400">
+                      {lead.customer.phone && (
+                        <div className="flex items-center gap-1.5">
+                          <Phone className="w-3 h-3" />{lead.customer.phone}
+                        </div>
+                      )}
+                      {lead.customer.email && (
+                        <div className="flex items-center gap-1.5">
+                          <Mail className="w-3 h-3" />{lead.customer.email}
+                        </div>
+                      )}
+                      <div className="flex items-center gap-1.5 col-span-2">
+                        <MapPin className="w-3 h-3" />{lead.address}
+                      </div>
+                      {lead.source && <div className="text-gray-500">Source: {lead.source}</div>}
+                    </div>
+                    {lead.notes && (
+                      <div className="mt-2 text-xs text-gray-500 line-clamp-2">{lead.notes}</div>
+                    )}
+                  </div>
+                  <div className="flex-shrink-0 flex gap-2">
+                    {lead.customer.phone && (
+                      <a href={`tel:${lead.customer.phone}`}
+                        className="px-3 py-1.5 bg-orange-700 hover:bg-orange-600 text-white text-xs font-semibold rounded-lg flex items-center gap-1">
+                        <Phone className="w-3 h-3" /> Call
+                      </a>
+                    )}
+                    <button
+                      onClick={() => convertProspect(lead.id)}
+                      disabled={converting === lead.id}
+                      className="px-3 py-1.5 bg-green-700 hover:bg-green-600 text-white text-xs font-semibold rounded-lg flex items-center gap-1 disabled:opacity-40"
+                    >
+                      <UserPlus className="w-3 h-3" /> {converting === lead.id ? 'Converting...' : 'Convert to Job'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* New leads needing outreach */}
       {draftLeads.length > 0 && (
         <div className="mb-6">
           <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3 flex items-center gap-1.5">
             <Clock className="w-3.5 h-3.5 text-red-400" />
-            <span className="text-red-400">New — Needs Contact</span>
+            <span className="text-red-400">New Estimates — Needs Contact</span>
           </h2>
           <div className="space-y-2">
             {draftLeads.map(lead => (
@@ -153,7 +238,7 @@ export default function LeadsPage() {
                       <div className="text-gray-400 text-xs">{lead.customer.phone}</div>
                     </td>
                     <td className="px-4 py-3 text-gray-300 text-xs max-w-48 truncate">{lead.address}</td>
-                    <td className="px-4 py-3 text-gray-400 text-xs">{lead.insurer || '—'}</td>
+                    <td className="px-4 py-3 text-gray-400 text-xs">{lead.insurer || '-'}</td>
                     <td className="px-4 py-3 text-right font-mono font-semibold text-white">{fmt(lead.our_total)}</td>
                     <td className="px-4 py-3 text-gray-400 text-xs">{fmtDate(lead.created_at)}</td>
                     <td className="px-4 py-3">

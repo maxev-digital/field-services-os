@@ -2,7 +2,7 @@
 
 import { useState, useEffect, Fragment } from 'react'
 import {
-  ChevronDown, ChevronRight, Mail, Phone, Save, Send, MapPin, Download, UserPlus, X,
+  ChevronDown, ChevronRight, Mail, MessageSquare, Phone, Save, Send, MapPin, Download, UserPlus, X, Search,
 } from 'lucide-react'
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -487,6 +487,24 @@ export default function StormProspects() {
   const [bulkSending, setBulkSending] = useState(false)
   const [bulkResult, setBulkResult] = useState<{ sent: number; failed: number; skipped: number } | null>(null)
 
+  // Skip trace
+  const [skipTracing, setSkipTracing] = useState(false)
+  const [skipResult, setSkipResult] = useState<{ found: number; updated: number; already_had_phone: number } | null>(null)
+
+  // Voice campaign
+  const [voiceSending, setVoiceSending] = useState(false)
+  const [voiceResult, setVoiceResult] = useState<{ dispatched: number; skipped: number; errors: number } | null>(null)
+
+
+  // Convert to Lead
+  const [converting, setConverting] = useState(false)
+  const [convertResult, setConvertResult] = useState<{ converted: number; already_existed: number; failed: number } | null>(null)
+  // SMS campaign
+  const [smsModalOpen, setSmsModalOpen] = useState(false)
+  const [smsSending, setSmsSending] = useState(false)
+  const [smsMessage, setSmsMessage] = useState(`Hi {{name}}, this is Roof Works of Texas. Your neighborhood was recently hit by hail and we're offering FREE roof inspections this week. Reply YES to schedule yours — no pressure, no obligation. Reply STOP to opt out.`)
+  const [smsResult, setSmsResult] = useState<{ sent: number; failed: number; total: number } | null>(null)
+
   // Template editor
   const [templateEditorOpen, setTemplateEditorOpen] = useState(false)
   const [editingTemplate, setEditingTemplate] = useState<Template | null>(null)
@@ -628,6 +646,90 @@ export default function StormProspects() {
       setBulkResult({ sent: 0, failed: emailTargets.length, skipped: 0 })
     } finally {
       setBulkSending(false)
+    }
+  }
+
+  // Skip trace
+  const runSkipTrace = async () => {
+    const targets = selected.size > 0
+      ? prospects.filter(p => selected.has(p.id))
+      : prospects.filter(p => !p.phone)
+    if (!targets.length) { alert('No prospects without phone numbers in selection'); return }
+    if (!confirm(`Run skip trace on ${targets.length} prospects?\n\nThis will charge ~$${(targets.length * 0.10).toFixed(2)} from your BatchData account.`)) return
+    setSkipTracing(true)
+    setSkipResult(null)
+    try {
+      const res = await fetch('/api/admin/prospects/skip-trace', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prospect_ids: targets.map(p => p.id) }),
+      })
+      const d = await res.json()
+      setSkipResult({ found: d.found ?? 0, updated: d.updated ?? 0, already_had_phone: d.already_had_phone ?? 0 })
+      fetchProspects(page)
+    } catch {
+      setSkipResult({ found: 0, updated: 0, already_had_phone: 0 })
+    } finally {
+      setSkipTracing(false)
+    }
+  }
+
+  // Voice campaign
+  const launchVoiceCampaign = async () => {
+    const targets = selected.size > 0
+      ? prospects.filter(p => selected.has(p.id))
+      : prospects.filter(p => p.phone)
+    const phoneTargets = targets.filter(p => p.phone)
+    if (!phoneTargets.length) { alert('No prospects with phone numbers in selection'); return }
+    if (!confirm(`Launch AI voice calls to ${phoneTargets.length} prospects?
+
+Calling from (214) 491-5254 via Retell AI.`)) return
+    setVoiceSending(true)
+    setVoiceResult(null)
+    try {
+      const res = await fetch('/api/admin/outreach/voice-campaign', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prospect_ids: phoneTargets.map(p => p.id) }),
+      })
+      const d = await res.json()
+      setVoiceResult({
+        dispatched: d.dispatched ?? 0,
+        skipped: d.skipped ?? 0,
+        errors: d.errors?.length ?? 0,
+      })
+      fetchProspects(page)
+    } catch {
+      setVoiceResult({ dispatched: 0, skipped: 0, errors: phoneTargets.length })
+    } finally {
+      setVoiceSending(false)
+    }
+  }
+
+
+  // Convert prospects to leads
+  const convertToLead = async () => {
+    const targets = selected.size > 0
+      ? prospects.filter(p => selected.has(p.id))
+      : prospects.filter(p => p.status === 'INTERESTED')
+    const interestedTargets = targets.filter(p => p.status === 'INTERESTED' || p.status === 'CONTACTED')
+    if (!interestedTargets.length) { alert('No INTERESTED or CONTACTED prospects in selection'); return }
+    if (!confirm(`Convert ${interestedTargets.length} prospect(s) to customer + job lead?`)) return
+    setConverting(true)
+    setConvertResult(null)
+    try {
+      const res = await fetch('/api/admin/prospects/convert', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prospect_ids: interestedTargets.map(p => p.id) }),
+      })
+      const d = await res.json()
+      setConvertResult({ converted: d.converted ?? 0, already_existed: d.already_existed ?? 0, failed: d.failed ?? 0 })
+      fetchProspects(page)
+    } catch {
+      setConvertResult({ converted: 0, already_existed: 0, failed: interestedTargets.length })
+    } finally {
+      setConverting(false)
     }
   }
 
@@ -942,6 +1044,142 @@ export default function StormProspects() {
             </div>
           )}
         </div>
+
+        {/* Skip Trace Bar */}
+        <div className="bg-gradient-to-r from-purple-900 to-purple-800 border border-purple-700 rounded-lg px-5 py-4 mb-4">
+          <div className="flex items-center gap-4 flex-wrap">
+            <span className="text-xs font-black text-purple-200 uppercase tracking-widest shrink-0">Skip Trace</span>
+            <span className="text-xs text-purple-300 shrink-0">BatchData · ~$0.10/record · finds mobile numbers</span>
+            <div className="flex items-center gap-2 ml-auto shrink-0">
+              <button
+                onClick={runSkipTrace}
+                disabled={skipTracing}
+                className="flex items-center gap-2 px-5 py-2 bg-white text-purple-900 text-sm font-black rounded hover:bg-purple-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <Search className="w-4 h-4" />
+                {skipTracing ? 'Running...' : `Skip Trace (${selected.size > 0 ? selected.size : prospects.filter(p => !p.phone).length} without phone)`}
+              </button>
+            </div>
+          </div>
+          {skipResult && (
+            <div className="mt-3 text-sm text-purple-100">
+              Done — <span className="text-green-300 font-bold">{skipResult.found} phones found</span>
+              {skipResult.already_had_phone > 0 && <span className="text-gray-400 ml-2">{skipResult.already_had_phone} already had phone</span>}
+            </div>
+          )}
+        </div>
+
+        {/* AI Voice Campaign Bar */}
+        <div className="bg-gradient-to-r from-red-900 to-red-800 border border-red-700 rounded-lg px-5 py-4 mb-4">
+          <div className="flex items-center gap-4 flex-wrap">
+            <span className="text-xs font-black text-red-200 uppercase tracking-widest shrink-0">AI Voice Campaign</span>
+            <span className="text-xs text-red-300 shrink-0">From: (214) 491-5254 via Retell AI</span>
+            <div className="flex items-center gap-2 ml-auto shrink-0">
+              <button
+                onClick={launchVoiceCampaign}
+                disabled={voiceSending}
+                className="flex items-center gap-2 px-5 py-2 bg-white text-red-900 text-sm font-black rounded hover:bg-red-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <Phone className="w-4 h-4" />
+                {voiceSending ? 'Launching...' : `Launch AI Calls (${selected.size > 0 ? selected.size : phoneCount})`}
+              </button>
+            </div>
+          </div>
+          {voiceResult && (
+            <div className="mt-3 text-sm text-red-100">
+              Done— <span className="text-green-300 font-bold">{voiceResult.dispatched} dispatched</span>
+              {voiceResult.skipped > 0 && <span className="text-yellow-300 font-bold ml-2">{voiceResult.skipped} skipped (no phone / DNC)</span>}
+              {voiceResult.errors > 0 && <span className="text-red-300 font-bold ml-2">{voiceResult.errors} errors</span>}
+            </div>
+          )}
+        </div>
+
+        {/* SMS Campaign Bar */}
+        <div className="bg-gradient-to-r from-blue-900 to-blue-800 border border-blue-700 rounded-lg px-5 py-4 mb-4">
+          <div className="flex items-center gap-4 flex-wrap">
+            <span className="text-xs font-black text-blue-200 uppercase tracking-widest shrink-0">SMS Campaign</span>
+            <span className="text-xs text-blue-300 shrink-0">Twilio 10DLC · ~$0.008/msg</span>
+            <div className="flex items-center gap-2 ml-auto shrink-0">
+              <button
+                onClick={() => setSmsModalOpen(true)}
+                disabled={smsSending}
+                className="flex items-center gap-2 px-5 py-2 bg-white text-blue-900 text-sm font-black rounded hover:bg-blue-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <MessageSquare className="w-4 h-4" />
+                {smsSending ? 'Sending...' : `Send SMS (${selected.size > 0 ? selected.size : phoneCount})`}
+              </button>
+            </div>
+          </div>
+          {smsResult && (
+            <div className="mt-3 text-sm text-blue-100">
+              Done — <span className="text-green-300 font-bold">{smsResult.sent} sent</span>
+              {smsResult.failed > 0 && <span className="text-yellow-300 font-bold ml-2">{smsResult.failed} failed</span>}
+            </div>
+          )}
+        </div>
+
+
+        {/* Convert to Lead Bar */}
+        <div className="bg-gradient-to-r from-green-900 to-green-800 border border-green-700 rounded-lg px-5 py-4 mb-4">
+          <div className="flex items-center gap-4 flex-wrap">
+            <span className="text-xs font-black text-green-200 uppercase tracking-widest shrink-0">Convert to Lead</span>
+            <span className="text-xs text-green-300 shrink-0">Creates customer + job from INTERESTED prospects</span>
+            <div className="flex items-center gap-2 ml-auto shrink-0">
+              <button
+                onClick={convertToLead}
+                disabled={converting}
+                className="flex items-center gap-2 px-5 py-2 bg-white text-green-900 text-sm font-black rounded hover:bg-green-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <UserPlus className="w-4 h-4" />
+                {converting ? 'Converting...' : `Convert to Lead (${selected.size > 0 ? selected.size : prospects.filter(p => p.status === 'INTERESTED').length})`}
+              </button>
+            </div>
+          </div>
+          {convertResult && (
+            <div className="mt-3 text-sm text-green-100">
+              Done — <span className="text-green-300 font-bold">{convertResult.converted} converted</span>
+              {convertResult.already_existed > 0 && <span className="text-yellow-300 font-bold ml-2">{convertResult.already_existed} already existed</span>}
+              {convertResult.failed > 0 && <span className="text-red-300 font-bold ml-2">{convertResult.failed} failed</span>}
+            </div>
+          )}
+        </div>
+        {/* SMS Modal */}
+        {smsModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+            <div className="bg-gray-900 border border-blue-700 rounded-xl w-full max-w-lg mx-4 p-6 shadow-2xl">
+              <h2 className="text-lg font-bold text-white mb-1">Compose SMS</h2>
+              <p className="text-xs text-gray-400 mb-4">
+                Sending to <span className="text-blue-300 font-semibold">{selected.size > 0 ? selected.size : phoneCount}</span> prospects with phone numbers.
+                Use <code className="bg-gray-700 px-1 rounded">{'{{name}}'}</code> to personalize.
+              </p>
+              <textarea
+                value={smsMessage}
+                onChange={e => setSmsMessage(e.target.value)}
+                rows={5}
+                maxLength={320}
+                className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 resize-none"
+              />
+              <div className="flex justify-between items-center mt-1 mb-4">
+                <span className="text-xs text-gray-500">{smsMessage.length}/320 chars</span>
+                <span className="text-xs text-gray-500">Est. cost: ~${((selected.size > 0 ? selected.size : phoneCount) * 0.008).toFixed(2)}</span>
+              </div>
+              <div className="flex gap-3">
+                <button
+                  onClick={launchSmsCampaign}
+                  className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-sm font-bold rounded-lg transition-colors"
+                >
+                  Send Now
+                </button>
+                <button
+                  onClick={() => setSmsModalOpen(false)}
+                  className="px-5 py-2.5 bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm font-semibold rounded-lg transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Master Template Editor */}
         <div className="bg-gradient-to-r from-teal-900 to-teal-800 rounded-lg border border-teal-600 px-5 py-4 mb-5">
