@@ -1,0 +1,216 @@
+/**
+ * GET  /api/admin/storm/zones?date=20260425
+ * POST /api/admin/storm/zones  { date: "20260425" }   (force recompute)
+ *
+ * Returns SPC hail points for a date as scout zones — each with prospect counts,
+ * cross streets from OSM Nominatim, and distance from Plano office.
+ * Results are cached in storm_zones table.
+ */
+import { NextRequest, NextResponse } from 'next/server';
+import { requireAdmin } from '@/lib/admin-auth';
+import prisma from '@/lib/prisma';
+
+const PLANO_LAT = 33.02, PLANO_LON = -96.70;
+
+// Real metro DFW bounding box — tighter than the alert script's generous bbox
+const DFW_LAT_MIN = 32.3, DFW_LAT_MAX = 33.5;
+const DFW_LON_MIN = -97.9, DFW_LON_MAX = -96.2;
+
+function hailRadius(hailIn: number): number {
+  if (hailIn >= 3.0) return 2.5;
+  if (hailIn >= 2.0) return 2.0;
+  if (hailIn >= 1.5) return 1.5;
+  if (hailIn >= 1.0) return 1.2;
+  return 1.0;
+}
+
+function distMiles(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  return 69.0 * Math.sqrt(Math.pow(lat1 - lat2, 2) + Math.pow(lon1 - lon2, 2));
+}
+
+function tierLabel(hailIn: number): string {
+  if (hailIn >= 3.0) return '3"+ Catastrophic';
+  if (hailIn >= 2.0) return '2"+ Major';
+  if (hailIn >= 1.5) return '1.5"+ Significant';
+  if (hailIn >= 1.0) return '1"+ Damaging';
+  return '0.75"+ Moderate';
+}
+
+function tierColor(hailIn: number): string {
+  if (hailIn >= 3.0) return '#7c3aed';
+  if (hailIn >= 2.0) return '#dc2626';
+  if (hailIn >= 1.5) return '#ea580c';
+  if (hailIn >= 1.0) return '#d97706';
+  return '#ca8a04';
+}
+
+async function fetchSpcPoints(dateYYYYMMDD: string) {
+  const yy  = dateYYYYMMDD.slice(2);
+  const url = `https://www.spc.noaa.gov/climo/reports/${yy}_rpts_filtered_hail.csv`;
+  try {
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'RoofWorksAdmin/1.0' },
+      signal: AbortSignal.timeout(12_000),
+    });
+    if (!res.ok) return [];
+    const text = await res.text();
+    return text.split('\n').slice(1).flatMap((line: string) => {
+      if (!line.trim()) return [];
+      const c = line.split(',');
+      if (c.length < 7) return [];
+      const lat   = parseFloat(c[5]);
+      const lon   = parseFloat(c[6]);
+      const size  = parseInt(c[1], 10);
+      const state = (c[4] || '').trim();
+      if (isNaN(lat) || isNaN(lon) || isNaN(size) || state !== 'TX') return [];
+      if (lat < DFW_LAT_MIN || lat > DFW_LAT_MAX || lon < DFW_LON_MIN || lon > DFW_LON_MAX) return [];
+      return [{ lat, lon, hailIn: size / 100, county: (c[3] || '').trim(), location: (c[2] || '').trim() }];
+    });
+  } catch { return []; }
+}
+
+async function reverseGeocode(lat: number, lon: number): Promise<string> {
+  try {
+    const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&zoom=16`;
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'RoofWorksAdmin/1.0 (info@roofworksoftexas.com)' },
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!res.ok) return '';
+    const data = await res.json();
+    const addr    = data.address || {};
+    const road    = addr.road || addr.pedestrian || addr.path || '';
+    const suburb  = addr.suburb || addr.neighbourhood || addr.city_district || '';
+    if (road && suburb) return `${road} near ${suburb}`;
+    if (road) return road;
+    return (data.display_name || '').split(',').slice(0, 2).join(',').trim();
+  } catch { return ''; }
+}
+
+async function computeZones(dateYYYYMMDD: string) {
+  const stormDate = `${dateYYYYMMDD.slice(0,4)}-${dateYYYYMMDD.slice(4,6)}-${dateYYYYMMDD.slice(6,8)}`;
+  const spcPoints = await fetchSpcPoints(dateYYYYMMDD);
+  if (spcPoints.length === 0) return [];
+
+  // Dedupe: keep highest hail per 0.02° grid cell (~1.4 mi)
+  const grid = new Map<string, typeof spcPoints[0]>();
+  for (const p of spcPoints) {
+    const key = `${Math.round(p.lat / 0.02) * 0.02},${Math.round(p.lon / 0.02) * 0.02}`;
+    const ex = grid.get(key);
+    if (!ex || p.hailIn > ex.hailIn) grid.set(key, p);
+  }
+  const unique = Array.from(grid.values());
+
+  const zones = [];
+  for (const pt of unique) {
+    const radiusMiles    = hailRadius(pt.hailIn);
+    const radiusDeg      = radiusMiles / 69.0;
+    const milesFromPlano = distMiles(pt.lat, pt.lon, PLANO_LAT, PLANO_LON);
+
+    // Count storm_prospects within the circle radius
+    const result = await prisma.$queryRaw<{ count: bigint; score60: bigint; max_score: number }[]>`
+      SELECT
+        COUNT(*) as count,
+        COUNT(CASE WHEN priority_score >= 60 THEN 1 END) as score60,
+        COALESCE(MAX(priority_score), 0) as max_score
+      FROM storm_prospects
+      WHERE storm_date = ${stormDate}
+        AND lat IS NOT NULL AND lon IS NOT NULL
+        AND ABS(lat - ${pt.lat}) <= ${radiusDeg}
+        AND ABS(lon - ${pt.lon}) <= ${radiusDeg * 1.4}
+        AND (69.0 * SQRT(POWER(lat - ${pt.lat}, 2) + POWER(lon - ${pt.lon}, 2))) <= ${radiusMiles}
+    `;
+    const row = result[0];
+
+    // Nominatim reverse geocode — 1 req/sec rate limit
+    const crossStreets = await reverseGeocode(pt.lat, pt.lon);
+    await new Promise(r => setTimeout(r, 1100));
+
+    await prisma.$executeRaw`
+      INSERT INTO storm_zones (storm_date, lat, lon, hail_size_in, radius_miles, location_desc, county, state, cross_streets, prospect_count, score60_count, max_score, miles_from_plano)
+      VALUES (${stormDate}, ${pt.lat}, ${pt.lon}, ${pt.hailIn}, ${radiusMiles},
+              ${pt.location}, ${pt.county}, 'TX', ${crossStreets},
+              ${Number(row.count)}, ${Number(row.score60)}, ${row.max_score},
+              ${Math.round(milesFromPlano * 10) / 10})
+      ON CONFLICT (storm_date, lat, lon) DO UPDATE SET
+        prospect_count   = EXCLUDED.prospect_count,
+        score60_count    = EXCLUDED.score60_count,
+        max_score        = EXCLUDED.max_score,
+        cross_streets    = COALESCE(NULLIF(EXCLUDED.cross_streets, ''), storm_zones.cross_streets),
+        miles_from_plano = EXCLUDED.miles_from_plano
+    `;
+
+    zones.push({
+      lat: pt.lat, lon: pt.lon,
+      hailIn:        pt.hailIn,
+      radiusMiles,
+      label:         tierLabel(pt.hailIn),
+      color:         tierColor(pt.hailIn),
+      location:      pt.location,
+      county:        pt.county,
+      crossStreets,
+      prospectCount: Number(row.count),
+      score60Count:  Number(row.score60),
+      maxScore:      row.max_score,
+      milesFromPlano: Math.round(milesFromPlano * 10) / 10,
+    });
+  }
+
+  return zones.sort((a, b) => b.hailIn - a.hailIn || b.prospectCount - a.prospectCount);
+}
+
+function toZoneShape(z: any) {
+  const hailIn = parseFloat(z.hail_size_in);
+  return {
+    id:            z.id,
+    lat:           parseFloat(z.lat),
+    lon:           parseFloat(z.lon),
+    hailIn,
+    radiusMiles:   parseFloat(z.radius_miles),
+    label:         tierLabel(hailIn),
+    color:         tierColor(hailIn),
+    location:      z.location_desc,
+    county:        z.county,
+    crossStreets:  z.cross_streets,
+    prospectCount: z.prospect_count,
+    score60Count:  z.score60_count,
+    maxScore:      z.max_score,
+    milesFromPlano: parseFloat(z.miles_from_plano),
+  };
+}
+
+export async function GET(req: NextRequest) {
+  try { await requireAdmin(); } catch {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  const date = req.nextUrl.searchParams.get('date');
+  if (!date || !/^\d{8}$/.test(date))
+    return NextResponse.json({ error: 'date=YYYYMMDD required' }, { status: 400 });
+
+  const stormDate = `${date.slice(0,4)}-${date.slice(4,6)}-${date.slice(6,8)}`;
+  const cached = await prisma.$queryRaw<any[]>`
+    SELECT * FROM storm_zones WHERE storm_date = ${stormDate}
+    ORDER BY hail_size_in DESC, prospect_count DESC
+  `;
+
+  if (cached.length > 0) {
+    return NextResponse.json({ date: stormDate, zones: cached.map(toZoneShape), cached: true });
+  }
+
+  const zones = await computeZones(date);
+  return NextResponse.json({ date: stormDate, zones, cached: false });
+}
+
+export async function POST(req: NextRequest) {
+  try { await requireAdmin(); } catch {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+  const { date } = await req.json();
+  if (!date) return NextResponse.json({ error: 'date required' }, { status: 400 });
+
+  const stormDate = `${date.slice(0,4)}-${date.slice(4,6)}-${date.slice(6,8)}`;
+  await prisma.$executeRaw`DELETE FROM storm_zones WHERE storm_date = ${stormDate}`;
+  const zones = await computeZones(date);
+  return NextResponse.json({ date: stormDate, zones, cached: false });
+}

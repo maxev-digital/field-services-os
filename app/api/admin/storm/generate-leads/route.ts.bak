@@ -1,0 +1,201 @@
+/**
+ * POST /api/admin/storm/generate-leads
+ * Fetches hail swath for a date, finds properties within it,
+ * scores by hail size x home value x roof age, creates storm_prospects.
+ */
+import { NextRequest, NextResponse } from 'next/server';
+import { requireAdmin } from '@/lib/admin-auth';
+import prisma from '@/lib/prisma';
+
+const MRMS_BASE = 'http://127.0.0.1:8001';
+
+function priorityScore(
+  hailIn: number,
+  value: number | null,
+  yearBuilt: number | null,
+  ownerOccupied: boolean
+): number {
+  // Hail component (0-40)
+  let hail = 0;
+  if      (hailIn >= 3.0)  hail = 40;
+  else if (hailIn >= 2.0)  hail = 34;
+  else if (hailIn >= 1.5)  hail = 28;
+  else if (hailIn >= 1.0)  hail = 20;
+  else if (hailIn >= 0.75) hail = 12;
+  else                     hail = 6;
+
+  // Value component (0-30) — normalized against $500k ceiling
+  const val = Math.min(value || 0, 500000);
+  const valueScore = Math.round((val / 500000) * 30);
+
+  // Age component (0-20) — older roof = higher priority
+  let age = 10;
+  if (yearBuilt) {
+    const roofAge = new Date().getFullYear() - yearBuilt;
+    if      (roofAge >= 20) age = 20;
+    else if (roofAge >= 15) age = 16;
+    else if (roofAge >= 10) age = 12;
+    else if (roofAge >= 5)  age = 6;
+    else                    age = 2;
+  }
+
+  // Owner-occupied bonus (0-10)
+  const ownerBonus = ownerOccupied ? 10 : 0;
+
+  return Math.min(100, hail + valueScore + age + ownerBonus);
+}
+
+export async function POST(req: NextRequest) {
+  try { await requireAdmin(); } catch {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  const body = await req.json();
+  const {
+    date,                      // YYYYMMDD
+    minHailSize   = 0.75,
+    excludeRentals  = true,
+    excludeExisting = true,
+    maxProperties   = 2000,
+  } = body;
+
+  if (!date) return NextResponse.json({ error: 'date required' }, { status: 400 });
+
+  // 1. Get swath polygons for this date via internal API
+  let swathFeatures: any[] = [];
+  try {
+    const host = req.headers.get('host') || 'localhost:3020';
+    const proto = process.env.NODE_ENV === 'production' ? 'https' : 'http';
+    const swathRes = await fetch(
+      `${proto}://${host}/api/admin/storm/swath?date=${date}`,
+      {
+        headers: { cookie: req.headers.get('cookie') || '' },
+        signal: AbortSignal.timeout(20000),
+      }
+    );
+    const swath = await swathRes.json();
+    swathFeatures = swath.features || [];
+  } catch (e: any) {
+    return NextResponse.json({ error: `Swath fetch failed: ${e.message}` }, { status: 500 });
+  }
+
+  if (swathFeatures.length === 0) {
+    return NextResponse.json({ created: 0, message: 'No hail swath data found for this date.' });
+  }
+
+  // 2. Query properties in each severity polygon, keep highest hail tier per parcel
+  const propertyMap = new Map<number, { prop: any; hailIn: number }>();
+
+  for (const feature of swathFeatures) {
+    const thresholdIn: number = feature.properties?.threshold_in ?? 0.5;
+    if (thresholdIn < minHailSize) continue;
+
+    try {
+      const params = new URLSearchParams({
+        exclude_rentals:  String(excludeRentals),
+        exclude_existing: String(excludeExisting),
+        limit:  String(maxProperties),
+        offset: '0',
+      });
+
+      const propRes = await fetch(`${MRMS_BASE}/properties?${params}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(feature.geometry),
+        signal: AbortSignal.timeout(30000),
+      });
+
+      if (!propRes.ok) continue;
+      const data = await propRes.json();
+
+      for (const prop of (data.properties || [])) {
+        const existing = propertyMap.get(prop.id);
+        if (!existing || thresholdIn > existing.hailIn) {
+          propertyMap.set(prop.id, { prop, hailIn: thresholdIn });
+        }
+      }
+    } catch { continue; }
+  }
+
+  if (propertyMap.size === 0) {
+    return NextResponse.json({
+      created: 0,
+      message: 'No properties found in hail swath. Ensure CAD data is loaded and geocoded.',
+    });
+  }
+
+  // 3. Score each property
+  const stormDateStr = `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}`;
+  const entries = Array.from(propertyMap.values());
+
+  // De-dupe: skip addresses already in prospects for this storm
+  const existingAddresses = new Set(
+    (await prisma.storm_prospects.findMany({
+      where: { storm_date: stormDateStr },
+      select: { address: true },
+    })).map(p => p.address.toLowerCase().trim())
+  );
+
+  const toCreate = entries
+    .filter(({ prop }) => !existingAddresses.has((prop.address || '').toLowerCase().trim()))
+    .map(({ prop, hailIn }) => {
+      const ownerOccupied = !prop.isLikelyRental;
+      const score = priorityScore(hailIn, prop.value, prop.yearBuilt, ownerOccupied);
+      const valueStr = prop.value ? `$${Math.round(prop.value).toLocaleString()}` : null;
+      return {
+        name:           prop.owner   || null,
+        address:        prop.address || '',
+        city:           prop.city    || 'Dallas',
+        zip:            prop.zip     || null,
+        damage_type:    'hail',
+        source:         `storm_${stormDateStr}`,
+        lat:            prop.lat     ?? null,
+        lon:            prop.lon     ?? null,
+        hail_size_in:   hailIn,
+        priority_score: score,
+        home_value:     prop.value   ?? null,
+        year_built:     prop.yearBuilt ?? null,
+        storm_date:     stormDateStr,
+        parcel_id:      prop.id      ?? null,
+        notes: [
+          `Auto-generated from ${stormDateStr} hail event`,
+          `Hail: ${hailIn}"`,
+          prop.yearBuilt ? `Built: ${prop.yearBuilt}` : null,
+          valueStr       ? `Value: ${valueStr}`       : null,
+          ownerOccupied  ? 'Owner-occupied'           : 'Likely rental',
+        ].filter(Boolean).join(' | '),
+      };
+    });
+
+  // Batch insert
+  let created = 0;
+  const CHUNK = 500;
+  for (let i = 0; i < toCreate.length; i += CHUNK) {
+    const result = await prisma.storm_prospects.createMany({
+      data: toCreate.slice(i, i + CHUNK),
+      skipDuplicates: true,
+    });
+    created += result.count;
+  }
+
+  // Tier breakdown
+  const tiers: Record<string, number> = {};
+  for (const { hailIn } of entries) {
+    const label =
+      hailIn >= 3.0  ? '3"+ Catastrophic'   :
+      hailIn >= 2.0  ? '2"+ Major'           :
+      hailIn >= 1.5  ? '1.5"+ Significant'   :
+      hailIn >= 1.0  ? '1"+ Damaging'        :
+      hailIn >= 0.75 ? '0.75"+ Moderate'     :
+                       '0.5"+ Any Hail';
+    tiers[label] = (tiers[label] || 0) + 1;
+  }
+
+  return NextResponse.json({
+    created,
+    total_found:     propertyMap.size,
+    already_existed: propertyMap.size - toCreate.length,
+    storm_date:      stormDateStr,
+    tiers,
+  });
+}

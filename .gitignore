@@ -1,0 +1,48 @@
+# Dependencies
+node_modules/
+
+# Build output
+.next/
+out/
+dist/
+build/
+
+# Environment — never commit real credentials
+.env
+.env.local
+.env.production
+.env.production.local
+!.env.example
+
+# Database
+prisma/*.db
+prisma/*.db-journal
+
+# Uploads / field photos
+uploads/
+data/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Internal docs
+CLAUDE.md
+
+# Credentials folder
+credentials/
+
+# Python
+__pycache__/
+*.pyc
+python-services/venv/
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
+
+# Operational IVR/campaign scripts — contain hardcoded credentials and run targets
+/*.js

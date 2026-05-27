@@ -1,0 +1,76 @@
+/**
+ * POST /api/admin/webhooks/twilio-inbound
+ * Handles inbound calls to (972) 362-1301.
+ * Connects caller to Retell AI (RW Inbound - Alex) via (214) 491-5254.
+ * Also handles missed-call auto-SMS on status callback.
+ */
+import { NextRequest, NextResponse } from 'next/server';
+import prisma from '@/lib/prisma';
+
+const RETELL_INBOUND_NUMBER = '+12144915254';
+
+function twiml(xml: string) {
+  return new NextResponse(`<?xml version="1.0" encoding="UTF-8"?>${xml}`, {
+    headers: { 'Content-Type': 'text/xml' },
+  });
+}
+
+function normalizePhone(raw: string): string {
+  const d = raw.replace(/\D/g, '');
+  if (d.length === 10) return `+1${d}`;
+  if (d.length === 11 && d.startsWith('1')) return `+${d}`;
+  return `+${d}`;
+}
+
+async function sendSms(to: string, body: string) {
+  const planId = process.env.SINCH_SERVICE_PLAN_ID;
+  const token  = process.env.SINCH_API_TOKEN;
+  const from   = process.env.SINCH_FROM_NUMBER;
+  if (!planId || !token || !from) return;
+  await fetch(`https://us.sms.api.sinch.com/xms/v1/${planId}/batches`, {
+    method:  'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ from, to: [to], body }),
+    signal:  AbortSignal.timeout(10000),
+  }).catch(() => {});
+}
+
+export async function POST(req: NextRequest) {
+  try {
+    const action     = req.nextUrl.searchParams.get('action') || 'voice';
+    const form       = await req.formData();
+    const from       = (form.get('From')       as string | null) || '';
+    const callStatus = (form.get('CallStatus') as string | null) || '';
+
+    // STATUS CALLBACK — missed call auto-SMS
+    if (action === 'status') {
+      const missed = ['no-answer', 'busy', 'failed', 'canceled'].includes(callStatus);
+      if (missed && from) {
+        const phone = normalizePhone(from);
+        const dnc = await prisma.dnc_list.findFirst({ where: { phone } }).catch(() => null);
+        if (!dnc) {
+          await sendSms(phone,
+            'Hi! Sorry we missed your call. This is Roof Works of Texas — we will call you back shortly. Need a roof inspection or estimate? Text us here or call (214) 795-3905. Reply STOP to opt out.'
+          ).catch(() => {});
+        }
+      }
+      return NextResponse.json({ ok: true });
+    }
+
+    // INBOUND VOICE — connect to Retell AI Alex via (214) 491-5254
+    return twiml(`<Response>
+  <Dial timeout="30" callerId="${RETELL_INBOUND_NUMBER}">
+    <Number>${RETELL_INBOUND_NUMBER}</Number>
+  </Dial>
+  <Say voice="Polly.Joanna">Sorry, we are unable to take your call right now. Please call us back at 214-795-3905. Thank you for calling Roof Works of Texas.</Say>
+</Response>`);
+
+  } catch (err: any) {
+    console.error('[twilio-inbound] error:', err.message);
+    return twiml(`<Response>
+  <Dial timeout="30">
+    <Number>${RETELL_INBOUND_NUMBER}</Number>
+  </Dial>
+</Response>`);
+  }
+}

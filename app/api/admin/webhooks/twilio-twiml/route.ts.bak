@@ -1,0 +1,77 @@
+/**
+ * GET/POST /api/admin/webhooks/twilio-twiml
+ * Returns TwiML for IVR robocalls.
+ *
+ * With MachineDetection=DetectMessageEnd, Twilio waits for the beep
+ * before calling this URL, passing AnsweredBy in the POST body.
+ *   AnsweredBy=machine_end_beep/silence → leave voicemail, hang up
+ *   AnsweredBy=human (or unset)         → play interactive IVR script
+ */
+import { NextRequest, NextResponse } from 'next/server';
+
+const BASE_URL   = 'https://admin.roofworksoftexas.com';
+const BASE_AUDIO = 'https://admin.roofworksoftexas.com/audio';
+
+const VOICEMAIL_MSG =
+  'Hi, this is Roof Works of Texas. We are reaching out because your neighborhood was recently ' +
+  'hit by hail and we are offering free roof inspections to homeowners in the area. ' +
+  'If you are interested, please call us back at 2 1 4, 7 9 5, 3 9 0 5, ' +
+  'or visit roofworksoftexas.com to schedule online. Have a great day!';
+
+const MACHINE_STATES = ['machine_end_beep', 'machine_end_silence', 'machine_end_other', 'fax'];
+
+function twiml(xml: string) {
+  return new NextResponse(`<?xml version="1.0" encoding="UTF-8"?>${xml}`, {
+    headers: { 'Content-Type': 'text/xml' },
+  });
+}
+
+function buildVoicemail(): string {
+  return `<Response>
+  <Say voice="Polly.Joanna-Neural">${VOICEMAIL_MSG}</Say>
+  <Hangup/>
+</Response>`;
+}
+
+function buildIvr(actionUrl: string, variant: string): string {
+  const audioMap: Record<string, string> = {
+    A: `${BASE_AUDIO}/script-a.mp3`,
+    B: `${BASE_AUDIO}/script-b.mp3`,
+  };
+  const audioUrl = audioMap[variant] || audioMap['A'];
+
+  return `<Response>
+  <Gather numDigits="1" action="${actionUrl}" method="POST" timeout="10">
+    <Play>${audioUrl}</Play>
+  </Gather>
+  <Say voice="Polly.Joanna-Neural">We did not receive your selection. Please call us at 2 1 4, 7 9 5, 3 9 0 5 or visit roofworksoftexas.com. Have a great day!</Say>
+</Response>`;
+}
+
+export async function GET(req: NextRequest) {
+  const { searchParams } = new URL(req.url);
+  const prospectId = searchParams.get('prospect_id') || '';
+  const variant    = (searchParams.get('variant') || 'A').toUpperCase();
+  const actionUrl  = `${BASE_URL}/api/admin/webhooks/twilio-ivr?prospect_id=${encodeURIComponent(prospectId)}&amp;action=keypress&amp;variant=${variant}`;
+  return twiml(buildIvr(actionUrl, variant));
+}
+
+export async function POST(req: NextRequest) {
+  const { searchParams } = new URL(req.url);
+  const prospectId = searchParams.get('prospect_id') || '';
+  const variant    = (searchParams.get('variant') || 'A').toUpperCase();
+
+  // Parse form body to check AMD result
+  let answeredBy = '';
+  try {
+    const form = await req.formData();
+    answeredBy = (form.get('AnsweredBy') as string | null) || '';
+  } catch {}
+
+  if (MACHINE_STATES.includes(answeredBy)) {
+    return twiml(buildVoicemail());
+  }
+
+  const actionUrl = `${BASE_URL}/api/admin/webhooks/twilio-ivr?prospect_id=${encodeURIComponent(prospectId)}&amp;action=keypress&amp;variant=${variant}`;
+  return twiml(buildIvr(actionUrl, variant));
+}

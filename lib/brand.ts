@@ -1,0 +1,15 @@
+export const brand = {
+  name:         process.env.NEXT_PUBLIC_BRAND_NAME          || 'Roof Works of Texas',
+  shortName:    process.env.NEXT_PUBLIC_BRAND_SHORT_NAME    || 'Roof Works',
+  tagline:      process.env.NEXT_PUBLIC_BRAND_TAGLINE       || 'Roofing Contractor · DFW & North Texas · Since 2015',
+  color:        process.env.NEXT_PUBLIC_BRAND_COLOR         || '#dc2626',
+  email:        process.env.NEXT_PUBLIC_BRAND_EMAIL         || 'info@roofworksoftexas.com',
+  phone:        process.env.NEXT_PUBLIC_BRAND_PHONE         || '(214) 795-3905',
+  phoneRaw:     process.env.NEXT_PUBLIC_BRAND_PHONE_RAW     || '2147953905',
+  senderName:   process.env.NEXT_PUBLIC_BRAND_SENDER_NAME   || 'Roof Works of Texas',
+  senderEmail:  process.env.NEXT_PUBLIC_BRAND_SENDER_EMAIL  || 'info@roofworksoftexas.com',
+  website:      process.env.NEXT_PUBLIC_SITE_URL            || 'https://roofworksoftexas.com',
+  logoUrl:      process.env.NEXT_PUBLIC_BRAND_LOGO_URL      || '/logo.png',
+  city:         process.env.NEXT_PUBLIC_BRAND_CITY          || 'Dallas-Fort Worth, TX',
+  googleReviewUrl: process.env.GOOGLE_REVIEW_URL            || '',
+};

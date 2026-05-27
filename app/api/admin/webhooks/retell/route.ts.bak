@@ -1,0 +1,311 @@
+/**
+ * POST /api/admin/webhooks/retell
+ * Receives post-call events from Retell AI.
+ * Maps call outcome to a granular prospect status for accurate conversion tracking.
+ *
+ * Status mapping:
+ *   VOICEMAIL    — no answer / voicemail / line busy → retry (up to 3 attempts)
+ *   HARD_NO      — instant hangup < 8s → suppress 90 days
+ *   NO_INTEREST  — connected, soft no → suppress 30 days
+ *   CALLBACK     — asked to be called back → follow-up queue
+ *   CONTACTED    — connected, neutral / unclear outcome → may retry
+ *   INTERESTED   — hot lead → immediate follow-up flow
+ *   DNC          — explicit opt-out → permanent, phone added to dnc_list
+ */
+import { NextRequest, NextResponse } from 'next/server';
+import prisma from '@/lib/prisma';
+import { sendEmail } from '@/lib/notify-email';
+import { notifyCallCompleted, notifyAppointmentBooked, notifyInboundCall } from '@/lib/telegram-notify';
+import { prospectToJob } from '@/lib/pipeline';
+
+const NOTIFY_EMAIL         = 'info@roofworksoftexas.com';
+const CALENDLY_BOOKING_URL = process.env.CALENDLY_BOOKING_URL || 'https://calendly.com/roofworksoftexas/30min';
+
+async function sendCalendlySms(phone: string, firstName: string) {
+  const sid   = process.env.TWILIO_ACCOUNT_SID;
+  const token = process.env.TWILIO_AUTH_TOKEN;
+  const from  = process.env.TWILIO_FROM_NUMBER;
+  if (!sid || !token || !from) return;
+  const body = `Hi ${firstName}, great news! We'd love to schedule your free roof inspection. Book a time that works: ${CALENDLY_BOOKING_URL} — Roof Works of Texas (214) 795-3905`;
+  await fetch(`https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`, {
+    method:  'POST',
+    headers: {
+      'Authorization': 'Basic ' + Buffer.from(`${sid}:${token}`).toString('base64'),
+      'Content-Type':  'application/x-www-form-urlencoded',
+    },
+    body: new URLSearchParams({ To: phone, From: from, Body: body }).toString(),
+    signal: AbortSignal.timeout(15000),
+  });
+}
+
+type OutcomeStatus = 'VOICEMAIL' | 'HARD_NO' | 'NO_INTEREST' | 'CALLBACK' | 'CONTACTED' | 'INTERESTED' | 'DNC';
+
+function mapStatus(
+  callAnalysis: any,
+  disconnectReason: string,
+  durationSeconds: number
+): OutcomeStatus {
+  const transcript = ((callAnalysis?.transcript || '') + '').toLowerCase();
+  const summary    = ((callAnalysis?.call_summary || '') + '').toLowerCase();
+  const sentiment  = (callAnalysis?.user_sentiment || '').toLowerCase();
+
+  // ── DNC — explicit opt-out (check first, highest priority) ──────────────
+  if (
+    /remove\s*(my\s*)?(number|me)\s*(from|off)/i.test(transcript) ||
+    /do not call|don'?t call|stop calling|never call again/i.test(transcript) ||
+    /take\s*(me|my number)\s*off/i.test(transcript) ||
+    /opt.?out|unsubscribe/i.test(transcript) ||
+    disconnectReason === 'do_not_call'
+  ) return 'DNC';
+
+  // ── No answer / voicemail ────────────────────────────────────────────────
+  if (['voicemail_reached', 'no_answer', 'line_busy', 'no_answer_machine', 'machine_detected'].includes(disconnectReason)) {
+    return 'VOICEMAIL';
+  }
+
+  // ── Hard no — instant hangup (connected but < 8 seconds) ────────────────
+  if (durationSeconds < 8 && disconnectReason === 'user_hangup') {
+    return 'HARD_NO';
+  }
+
+  // ── Positive — appointment booked / inspection confirmed ────────────────
+  if (
+    /pencil you in|see you then|confirmed|sounds good|that works|i'll be (there|home)|look forward/i.test(transcript) ||
+    /appointment|inspection booked|scheduled|set.?up.*inspection/i.test(summary)
+  ) return 'INTERESTED';
+
+  // ── Callback request ─────────────────────────────────────────────────────
+  if (
+    /call (me )?back|try (me )?again|better time|call (me )?(tomorrow|later|next week)|not a good time/i.test(transcript) ||
+    /callback|call back|try again later/i.test(summary)
+  ) return 'CALLBACK';
+
+  // ── Soft no — not interested / already handled ───────────────────────────
+  if (
+    /not interested|no thank(s)?|already have|just had|don'?t need|no need|we'?re good|all set|already (got|have) (a )?roofer/i.test(transcript) ||
+    /not interested|declined|already covered|has (a )?roofer|won'?t proceed/i.test(summary) ||
+    (sentiment === 'negative' && durationSeconds >= 8)
+  ) return 'NO_INTEREST';
+
+  // ── Connected, unclear outcome ───────────────────────────────────────────
+  return 'CONTACTED';
+}
+
+function normalizePhone(raw: string): string {
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`;
+  return `+${digits}`;
+}
+
+export async function POST(req: NextRequest) {
+  try {
+    const body  = await req.text();
+    const event = JSON.parse(body);
+    const { event: eventType, call } = event;
+
+    // ── Inbound call started ─────────────────────────────────────────────
+    if (eventType === 'call_started' && call?.direction === 'inbound') {
+      const from = call.from_number || 'Unknown';
+      const time = new Date().toLocaleString('en-US', { timeZone: 'America/Chicago', dateStyle: 'short', timeStyle: 'short' });
+      sendEmail({
+        to: NOTIFY_EMAIL,
+        subject: `📞 Inbound Call — ${from}`,
+        html: `<div style="font-family:Arial,sans-serif;max-width:500px;padding:24px;">
+          <h2 style="background:#1a3a5c;color:#fff;padding:12px 20px;margin:0 0 16px;">Inbound Call Coming In</h2>
+          <p><strong>From:</strong> ${from}</p>
+          <p><strong>Time:</strong> ${time} CT</p>
+          <p style="color:#666;font-size:14px;">Alex is handling the call. Follow-up email when it ends.</p>
+        </div>`,
+      }).catch(() => {});
+      notifyInboundCall(from).catch(() => {});
+      return NextResponse.json({ received: true });
+    }
+
+    if (eventType !== 'call_ended' || !call) {
+      return NextResponse.json({ received: true });
+    }
+
+    const callId           = call.call_id;
+    const disconnectReason = call.disconnect_reason || '';
+    const duration         = call.end_timestamp && call.start_timestamp
+      ? Math.round((call.end_timestamp - call.start_timestamp) / 1000)
+      : 0;
+    const callAnalysis = call.call_analysis || null;
+    const transcript   = call.transcript || '';
+    const newStatus    = mapStatus(callAnalysis, disconnectReason, duration);
+
+    // ── Find call record ─────────────────────────────────────────────────
+    const callRecord = await prisma.retell_calls.findUnique({
+      where:  { call_id: callId },
+      select: { prospect_id: true },
+    });
+
+    if (!callRecord) {
+      console.log(`[retell] Unknown call_id ${callId}`);
+      return NextResponse.json({ received: true });
+    }
+
+    const prospectId = callRecord.prospect_id;
+
+    // ── Update retell_calls record ───────────────────────────────────────
+    await prisma.retell_calls.update({
+      where: { call_id: callId },
+      data: {
+        status:            newStatus,
+        duration_seconds:  duration,
+        transcript:        transcript,
+        call_summary:      callAnalysis?.call_summary || null,
+        disconnect_reason: disconnectReason,
+        updated_at:        new Date(),
+      },
+    });
+
+    // ── Update prospect status ───────────────────────────────────────────
+    if (prospectId) {
+      // Never downgrade INTERESTED or CONVERTED
+      const PROTECTED = ['INTERESTED', 'CONVERTED'];
+      await prisma.storm_prospects.updateMany({
+        where: { id: prospectId, status: { notIn: PROTECTED as any } },
+        data:  { status: newStatus as any, updated_at: new Date() },
+      });
+
+      // ── If DNC — add phone to dnc_list for cross-record suppression ────
+      if (newStatus === 'DNC') {
+        const prospect = await prisma.storm_prospects.findUnique({
+          where:  { id: prospectId },
+          select: { phone: true },
+        });
+        if (prospect?.phone) {
+          const normalized = normalizePhone(prospect.phone);
+          await prisma.dnc_list.upsert({
+            where:  { phone: normalized },
+            create: { phone: normalized, reason: 'Opted out during AI call', source: 'call_request' },
+            update: {},
+          }).catch(() => {});
+          // Mark ALL prospects with this phone as DNC
+          await prisma.storm_prospects.updateMany({
+            where: { phone: { in: [prospect.phone, normalized] } },
+            data:  { status: 'DNC' as any, updated_at: new Date() },
+          });
+        }
+      }
+
+      // ── If INTERESTED — hot lead flow ────────────────────────────────
+      if (newStatus === 'INTERESTED') {
+        const existing = await prisma.storm_prospects.findUnique({
+          where:  { id: prospectId },
+          select: { notes: true, name: true, address: true, phone: true },
+        });
+
+        const note = `[AI CALL ${new Date().toISOString()}] Interested. Duration: ${duration}s. Summary: ${callAnalysis?.call_summary || 'N/A'}`;
+        await prisma.storm_prospects.update({
+          where: { id: prospectId },
+          data:  { notes: existing?.notes ? `${existing.notes}\n${note}` : note },
+        });
+
+        // Admin notification
+        const prospectName = existing?.name || call.to_number || 'Unknown';
+        const prospectAddr = existing?.address || '';
+        await prisma.$executeRaw`
+          INSERT INTO admin_notifications (id, type, title, message, data)
+          VALUES (
+            gen_random_uuid()::text, 'appointment_booked',
+            ${'Appointment Booked — ' + prospectName},
+            ${'Appointment booked: ' + prospectName + (prospectAddr ? ' at ' + prospectAddr : '')},
+            ${JSON.stringify({ prospectId, prospectName, phone: existing?.phone, address: prospectAddr, duration, summary: callAnalysis?.call_summary })}::jsonb
+          )`.catch(() => {});
+
+        // Hot lead email
+        const prospectPhone = existing?.phone || call.to_number || 'Unknown';
+        const summary       = callAnalysis?.call_summary || 'No summary available';
+        const time          = new Date().toLocaleString('en-US', { timeZone: 'America/Chicago', dateStyle: 'short', timeStyle: 'short' });
+        sendEmail({
+          to: NOTIFY_EMAIL,
+          subject: `🔥 HOT LEAD — ${prospectName} is INTERESTED`,
+          html: `<div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;">
+            <div style="background:#16a34a;padding:20px 24px;">
+              <h1 style="margin:0;color:#fff;font-size:22px;">🔥 Hot Lead — Follow Up Now</h1>
+              <p style="margin:6px 0 0;color:#bbf7d0;font-size:14px;">AI call ended — prospect expressed interest in a free inspection</p>
+            </div>
+            <div style="background:#fff;padding:24px;border:1px solid #e5e7eb;">
+              <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
+                <tr><td style="padding:8px 0;color:#6b7280;font-size:13px;width:100px;">Name</td><td style="padding:8px 0;font-weight:bold;font-size:15px;">${prospectName}</td></tr>
+                <tr><td style="padding:8px 0;color:#6b7280;font-size:13px;">Phone</td><td style="padding:8px 0;font-weight:bold;font-size:15px;"><a href="tel:${prospectPhone}" style="color:#16a34a;">${prospectPhone}</a></td></tr>
+                <tr><td style="padding:8px 0;color:#6b7280;font-size:13px;">Address</td><td style="padding:8px 0;font-size:14px;">${prospectAddr}</td></tr>
+                <tr><td style="padding:8px 0;color:#6b7280;font-size:13px;">Call Time</td><td style="padding:8px 0;font-size:14px;">${time} CT · ${duration}s</td></tr>
+              </table>
+              <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:16px;margin-bottom:20px;">
+                <p style="margin:0 0 6px;font-size:12px;font-weight:bold;color:#15803d;text-transform:uppercase;">AI Summary</p>
+                <p style="margin:0;font-size:14px;">${summary}</p>
+              </div>
+              <a href="https://admin.roofworksoftexas.com/admin/prospects" style="display:inline-block;background:#16a34a;color:#fff;padding:12px 28px;border-radius:6px;text-decoration:none;font-weight:bold;">View Prospect →</a>
+            </div>
+          </div>`,
+        }).catch(() => {});
+
+        // Calendly booking SMS
+        const rawPhone = existing?.phone || null;
+        if (rawPhone) {
+          const norm = normalizePhone(rawPhone);
+          if (norm.length >= 12) {
+            const fName = (existing?.name || '').split(' ')[0] || 'there';
+            sendCalendlySms(norm, fName).catch(() => {});
+          }
+        }
+
+        // Telegram
+        notifyAppointmentBooked(prospectName, existing?.phone || '', callAnalysis?.call_summary || '').catch(() => {});
+
+        // Auto-convert to job
+        prospectToJob(prospectId, 'ai_voice_campaign').catch(() => {});
+      }
+    }
+
+    // ── Notifications for all connected calls > 10s ──────────────────────
+    if (duration > 10 && prospectId) {
+      const info = await prisma.storm_prospects.findUnique({
+        where:  { id: prospectId },
+        select: { name: true, phone: true },
+      });
+      const callerName = info?.name || call.to_number || 'Unknown';
+      const summaryText = callAnalysis?.call_summary || '';
+
+      await prisma.$executeRaw`
+        INSERT INTO admin_notifications (id, type, title, message, data)
+        VALUES (
+          gen_random_uuid()::text, 'call_completed',
+          ${'Call Ended — ' + callerName + ' (' + newStatus + ')'},
+          ${(summaryText || 'No summary').slice(0, 200)},
+          ${JSON.stringify({ prospectId, callerName, phone: info?.phone, duration, status: newStatus, disconnectReason })}::jsonb
+        )`.catch(() => {});
+
+      if (newStatus !== 'INTERESTED') {
+        notifyCallCompleted(callerName, info?.phone || '', duration, summaryText, newStatus).catch(() => {});
+      }
+    }
+
+    // ── Post-call summary for inbound calls ──────────────────────────────
+    if (call.direction === 'inbound') {
+      const from    = call.from_number || 'Unknown';
+      const summary = callAnalysis?.call_summary || 'No summary';
+      const time    = new Date().toLocaleString('en-US', { timeZone: 'America/Chicago', dateStyle: 'short', timeStyle: 'short' });
+      sendEmail({
+        to: NOTIFY_EMAIL,
+        subject: `Call Summary — ${from} (${newStatus})`,
+        html: `<div style="font-family:Arial,sans-serif;max-width:500px;padding:24px;">
+          <h2 style="background:#1a3a5c;color:#fff;padding:12px 20px;margin:0 0 16px;">Call Ended — ${newStatus}</h2>
+          <p><strong>From:</strong> ${from}</p>
+          <p><strong>Time:</strong> ${time} CT &nbsp;|&nbsp; <strong>Duration:</strong> ${duration}s</p>
+          <p><strong>Summary:</strong> ${summary}</p>
+          ${transcript ? `<details style="margin-top:16px;"><summary style="cursor:pointer;color:#1a3a5c;font-weight:bold;">Full Transcript</summary><pre style="font-size:12px;white-space:pre-wrap;margin-top:8px;background:#f5f5f5;padding:12px;">${transcript}</pre></details>` : ''}
+        </div>`,
+      }).catch(() => {});
+    }
+
+    return NextResponse.json({ received: true, prospect_id: prospectId, status: newStatus });
+  } catch (err: any) {
+    console.error('[retell webhook] error:', err);
+    return NextResponse.json({ error: err.message }, { status: 500 });
+  }
+}
