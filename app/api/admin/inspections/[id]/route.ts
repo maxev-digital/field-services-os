@@ -11,6 +11,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       include: {
         items: { orderBy: { sort_order: 'asc' } },
         photos: { orderBy: { created_at: 'asc' } },
+        customer: { select: { id: true, name: true, phone: true } },
       },
     });
 
@@ -28,7 +29,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     await requireAdmin();
 
     const body = await req.json();
-    const allowed = ['address', 'inspector', 'inspection_date', 'weather', 'notes', 'status'];
+    const allowed = ['address', 'inspector', 'inspection_date', 'weather', 'notes', 'status', 'customer_id'];
     const data: any = {};
     for (const key of allowed) {
       if (body[key] !== undefined) {

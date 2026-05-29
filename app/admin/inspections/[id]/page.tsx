@@ -13,6 +13,8 @@ import {
   FileText,
   CheckCircle,
   ClipboardList,
+  Plus,
+  DollarSign,
 } from 'lucide-react';
 import { INSPECTION_SECTIONS } from '@/lib/inspection-sections';
 
@@ -46,6 +48,34 @@ interface InspectionReport {
   created_at: string;
   items: InspectionItem[];
   photos: InspectionPhoto[];
+  customer: { id: string; name: string; phone: string } | null;
+}
+
+interface CustomerResult {
+  id: string;
+  name: string;
+  phone: string;
+  address: string | null;
+}
+
+interface CatalogItem {
+  id: string;
+  label: string;
+  category: string;
+  unit: string;
+  xactimate: number;
+  ours: number;
+}
+
+interface InspectionLineItem {
+  id: string;
+  line_item_id: string;
+  label: string;
+  category: string;
+  unit: string;
+  qty: number;
+  xactimate: number;
+  ours: number;
 }
 
 interface SectionState {
@@ -92,6 +122,22 @@ function compressImage(file: File, maxPx = 1400, quality = 0.82): Promise<string
   });
 }
 
+// ─── Section → catalog category mapping ──────────────────────────────────────
+
+const SECTION_CATALOG_MAP: Record<string, string[]> = {
+  ROOFING:     ['Shingles', 'Tear-Off & Demo', 'Tear-Off & Disposal', 'Underlayment',
+                'Ridges & Caps', 'Starter Strips', 'Starters', 'Decking',
+                'Pipe Boots / Jacks', 'Penetrations & Vents', 'Roof Vents',
+                'Vents & Pipe Jacks', 'Flashing', 'Drip Edge', 'Misc'],
+  GUTTERS:     ['Gutters'],
+  FENCE:       ['Fence', 'Power Wash & Staining'],
+  SCREENS:     ['Screens'],
+  PATIO_COVER: ['Patio Cover', 'Power Wash & Staining'],
+  GARAGE_DOOR: ['Garage Door'],
+  SIDING:      ['Siding'],
+  CHIMNEY:     ['Chimney'],
+};
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function InspectionDetailPage() {
@@ -117,6 +163,18 @@ export default function InspectionDetailPage() {
   const [saving, setSaving] = useState(false);
   const [savingHeader, setSavingHeader] = useState(false);
   const [uploadingSections, setUploadingSections] = useState<Record<string, boolean>>({});
+  const [lineItems, setLineItems] = useState<InspectionLineItem[]>([]);
+  const [catalog, setCatalog] = useState<CatalogItem[]>([]);
+  const [loadingCatalog, setLoadingCatalog] = useState(true);
+  const [creatingEst, setCreatingEst] = useState(false);
+  const [qtyInputs, setQtyInputs] = useState<Record<string, string>>({});
+
+  // Customer link
+  const [linkedCustomer, setLinkedCustomer] = useState<{ id: string; name: string; phone: string } | null>(null);
+  const [customerSearch, setCustomerSearch] = useState('');
+  const [customerResults, setCustomerResults] = useState<CustomerResult[]>([]);
+  const [customerSearchOpen, setCustomerSearchOpen] = useState(false);
+  const [savingCustomer, setSavingCustomer] = useState(false);
 
   // Per-section debounce timers
   const debounceTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
@@ -166,8 +224,19 @@ export default function InspectionDetailPage() {
           photos[p.section].push(p);
         }
         setSectionPhotos(photos);
+        setLinkedCustomer(rpt.customer ?? null);
       })
       .finally(() => setLoading(false));
+  }, [id]);
+
+  useEffect(() => {
+    Promise.all([
+      fetch('/api/admin/line-items').then((r) => r.json()),
+      fetch(`/api/admin/inspections/${id}/line-items`).then((r) => r.json()),
+    ]).then(([catData, liData]) => {
+      if (catData.items) setCatalog(catData.items);
+      if (liData.items) setLineItems(liData.items);
+    }).finally(() => setLoadingCatalog(false));
   }, [id]);
 
   // ── Save header ─────────────────────────────────────────────────────────────
@@ -307,9 +376,101 @@ export default function InspectionDetailPage() {
     }));
   }
 
+  async function addLineItem(catalogItem: CatalogItem) {
+    const qty = parseFloat(qtyInputs[catalogItem.id] || '1') || 1;
+    const res = await fetch(`/api/admin/inspections/${id}/line-items`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ line_item_id: catalogItem.id, qty }),
+    });
+    const data = await res.json();
+    if (data.item) {
+      setLineItems((prev) => [...prev, data.item]);
+      setQtyInputs((prev) => ({ ...prev, [catalogItem.id]: '' }));
+    }
+  }
+
+  async function removeLineItem(itemId: string) {
+    await fetch(`/api/admin/inspections/${id}/line-items?item_id=${itemId}`, { method: 'DELETE' });
+    setLineItems((prev) => prev.filter((i) => i.id !== itemId));
+  }
+
+  async function updateLineItemQty(itemId: string, qty: number) {
+    const res = await fetch(`/api/admin/inspections/${id}/line-items`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ item_id: itemId, qty }),
+    });
+    const data = await res.json();
+    if (data.item) {
+      setLineItems((prev) => prev.map((i) => i.id === itemId ? { ...i, qty: data.item.qty } : i));
+    }
+  }
+
+  async function createEstimate() {
+    setCreatingEst(true);
+    try {
+      const res = await fetch(`/api/admin/inspections/${id}/create-estimate`, { method: 'POST' });
+      const data = await res.json();
+      if (data.estimate_id) {
+        router.push(`/admin/estimates/${data.estimate_id}`);
+      } else {
+        alert(data.error || 'Failed to create estimate');
+      }
+    } finally {
+      setCreatingEst(false);
+    }
+  }
+
+  // ── Customer search ─────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!customerSearch.trim()) { setCustomerResults([]); return; }
+    const t = setTimeout(() => {
+      fetch(`/api/admin/customers?search=${encodeURIComponent(customerSearch)}`)
+        .then((r) => r.json())
+        .then((d) => setCustomerResults(d.customers?.slice(0, 6) ?? []));
+    }, 300);
+    return () => clearTimeout(t);
+  }, [customerSearch]);
+
+  async function linkCustomer(c: CustomerResult) {
+    setSavingCustomer(true);
+    try {
+      await fetch(`/api/admin/inspections/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customer_id: c.id }),
+      });
+      setLinkedCustomer(c);
+      setCustomerSearch('');
+      setCustomerResults([]);
+      setCustomerSearchOpen(false);
+    } finally {
+      setSavingCustomer(false);
+    }
+  }
+
+  async function unlinkCustomer() {
+    setSavingCustomer(true);
+    try {
+      await fetch(`/api/admin/inspections/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customer_id: null }),
+      });
+      setLinkedCustomer(null);
+    } finally {
+      setSavingCustomer(false);
+    }
+  }
+
   // ── Counts ──────────────────────────────────────────────────────────────────
   const damagedCount = INSPECTION_SECTIONS.filter((s) => itemData[s.key]?.damaged).length;
-
+  const catalogByCategory = catalog.reduce<Record<string, CatalogItem[]>>((acc, item) => {
+    if (!acc[item.category]) acc[item.category] = [];
+    acc[item.category].push(item);
+    return acc;
+  }, {});
   // ── Loading ─────────────────────────────────────────────────────────────────
   if (loading) {
     return (
@@ -343,14 +504,26 @@ export default function InspectionDetailPage() {
             <h1 className="text-lg font-bold text-white truncate max-w-md">{report.address}</h1>
           </div>
         </div>
-        <button
-          onClick={saveAllItems}
-          disabled={saving}
-          className="flex items-center gap-2 px-4 py-2 bg-red-700 hover:bg-red-600 disabled:opacity-50 text-white text-sm font-medium rounded transition-colors"
-        >
-          <Save className="w-4 h-4" />
-          {saving ? 'Saving...' : 'Save All'}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={saveAllItems}
+            disabled={saving}
+            className="flex items-center gap-2 px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-white text-sm font-medium rounded transition-colors"
+          >
+            <Save className="w-4 h-4" />
+            {saving ? 'Saving...' : 'Save All'}
+          </button>
+          {lineItems.length > 0 && (
+            <button
+              onClick={createEstimate}
+              disabled={creatingEst}
+              className="flex items-center gap-2 px-4 py-2 bg-green-700 hover:bg-green-600 disabled:opacity-50 text-white text-sm font-medium rounded transition-colors"
+            >
+              <DollarSign className="w-4 h-4" />
+              {creatingEst ? 'Creating...' : 'Create Estimate'}
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -581,6 +754,99 @@ export default function InspectionDetailPage() {
                         </div>
                       )}
                     </div>
+
+                    {/* Billable Items — filtered to this section */}
+                    {(() => {
+                      const sectionCats = SECTION_CATALOG_MAP[sec.key] ?? [];
+                      if (sectionCats.length === 0) return null;
+                      const sectionItems = lineItems.filter((i) => sectionCats.includes(i.category));
+                      const sectionCatalog = sectionCats.flatMap((cat) => catalogByCategory[cat] ?? []);
+                      if (sectionCatalog.length === 0 && sectionItems.length === 0) return null;
+                      return (
+                        <div className="border-t border-gray-700 pt-4">
+                          <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Billable Items</h4>
+
+                          {/* Added items table */}
+                          {sectionItems.length > 0 && (
+                            <table className="w-full text-xs mb-3">
+                              <thead>
+                                <tr className="text-gray-400 border-b border-gray-700">
+                                  <th className="text-left py-1.5 font-medium">Item</th>
+                                  <th className="text-center py-1.5 font-medium w-20">Qty</th>
+                                  <th className="text-right py-1.5 font-medium">Median Price</th>
+                                  <th className="text-right py-1.5 font-medium">Ours</th>
+                                  <th className="w-7" />
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {sectionItems.map((item) => (
+                                  <tr key={item.id} className="border-b border-gray-700/50 hover:bg-gray-700/30">
+                                    <td className="py-1.5">
+                                      <div className="text-white">{item.label}</div>
+                                      <div className="text-gray-500">{item.unit}</div>
+                                    </td>
+                                    <td className="py-1.5 text-center">
+                                      <input
+                                        type="number"
+                                        min="0"
+                                        step="0.5"
+                                        value={item.qty}
+                                        onChange={(e) => updateLineItemQty(item.id, parseFloat(e.target.value) || 0)}
+                                        className="w-16 bg-gray-700 border border-gray-600 rounded px-2 py-1 text-center text-white focus:outline-none focus:border-red-500"
+                                      />
+                                    </td>
+                                    <td className="py-1.5 text-right text-gray-300">${(item.qty * item.xactimate).toFixed(0)}</td>
+                                    <td className="py-1.5 text-right text-green-400">${(item.qty * item.ours).toFixed(0)}</td>
+                                    <td className="py-1.5 pl-1">
+                                      <button onClick={() => removeLineItem(item.id)} className="p-1 text-gray-500 hover:text-red-400 transition-colors">
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
+                                    </td>
+                                  </tr>
+                                ))}
+                                {sectionItems.length > 1 && (
+                                  <tr className="bg-gray-700/30 font-semibold">
+                                    <td className="py-1 text-gray-400">TOTAL</td>
+                                    <td />
+                                    <td className="py-1 text-right text-gray-200">${sectionItems.reduce((s, i) => s + i.qty * i.xactimate, 0).toFixed(0)}</td>
+                                    <td className="py-1 text-right text-green-400">${sectionItems.reduce((s, i) => s + i.qty * i.ours, 0).toFixed(0)}</td>
+                                    <td />
+                                  </tr>
+                                )}
+                              </tbody>
+                            </table>
+                          )}
+
+                          {/* Catalog picker */}
+                          <div className="space-y-1">
+                            {sectionCatalog.map((item) => (
+                              <div key={item.id} className="flex items-center gap-2 py-0.5">
+                                <div className="flex-1 min-w-0">
+                                  <span className="text-xs text-gray-300">{item.label}</span>
+                                  <span className="ml-1.5 text-xs text-gray-500">({item.unit}) · ${item.ours}/unit</span>
+                                </div>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="0.5"
+                                  placeholder="Qty"
+                                  value={qtyInputs[item.id] || ''}
+                                  onChange={(e) => setQtyInputs((prev) => ({ ...prev, [item.id]: e.target.value }))}
+                                  className="w-16 bg-gray-700 border border-gray-600 rounded px-2 py-1 text-center text-xs text-white placeholder-gray-600 focus:outline-none focus:border-red-500"
+                                />
+                                <button
+                                  onClick={() => addLineItem(item)}
+                                  className="flex items-center gap-1 px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white text-xs rounded transition-colors flex-shrink-0"
+                                >
+                                  <Plus className="w-3.5 h-3.5" />
+                                  Add
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
                 )}
               </div>
@@ -627,6 +893,64 @@ export default function InspectionDetailPage() {
                 Complete
               </button>
             </div>
+          </div>
+
+          {/* Customer link card */}
+          <div className="bg-gray-800 border border-gray-700 rounded-lg p-4 space-y-3">
+            <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Linked Customer</h3>
+            {linkedCustomer ? (
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <button
+                    onClick={() => router.push(`/admin/customers/${linkedCustomer.id}`)}
+                    className="text-sm font-medium text-white hover:text-red-400 transition-colors text-left"
+                  >
+                    {linkedCustomer.name}
+                  </button>
+                  {linkedCustomer.phone && (
+                    <div className="text-xs text-gray-400 mt-0.5">{linkedCustomer.phone}</div>
+                  )}
+                </div>
+                <button
+                  onClick={unlinkCustomer}
+                  disabled={savingCustomer}
+                  className="text-xs text-gray-500 hover:text-red-400 transition-colors flex-shrink-0"
+                >
+                  Unlink
+                </button>
+              </div>
+            ) : (
+              <div className="relative">
+                <input
+                  type="text"
+                  value={customerSearch}
+                  onChange={(e) => { setCustomerSearch(e.target.value); setCustomerSearchOpen(true); }}
+                  onFocus={() => setCustomerSearchOpen(true)}
+                  placeholder="Search customers..."
+                  className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-red-500"
+                />
+                {customerSearchOpen && customerResults.length > 0 && (
+                  <div className="absolute z-10 w-full mt-1 bg-gray-800 border border-gray-600 rounded shadow-lg">
+                    {customerResults.map((c) => (
+                      <button
+                        key={c.id}
+                        onClick={() => linkCustomer(c)}
+                        disabled={savingCustomer}
+                        className="w-full text-left px-3 py-2 hover:bg-gray-700 transition-colors"
+                      >
+                        <div className="text-sm text-white">{c.name}</div>
+                        <div className="text-xs text-gray-400">{c.phone}{c.address ? ` · ${c.address}` : ''}</div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {customerSearchOpen && customerSearch.trim() && customerResults.length === 0 && (
+                  <div className="absolute z-10 w-full mt-1 bg-gray-800 border border-gray-600 rounded shadow-lg px-3 py-2 text-xs text-gray-500">
+                    No customers found
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Report details card */}
@@ -723,6 +1047,20 @@ export default function InspectionDetailPage() {
               })}
             </div>
           </div>
+
+          {/* Create Estimate */}
+          <button
+            onClick={createEstimate}
+            disabled={creatingEst || lineItems.length === 0}
+            className="flex items-center justify-center gap-2 w-full px-4 py-3 bg-green-700 hover:bg-green-600 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg transition-colors"
+          >
+            <DollarSign className="w-4 h-4" />
+            {creatingEst
+              ? 'Creating...'
+              : lineItems.length === 0
+              ? 'Add Items First'
+              : `Create Estimate (${lineItems.length})`}
+          </button>
 
           {/* Download PDF */}
           <a

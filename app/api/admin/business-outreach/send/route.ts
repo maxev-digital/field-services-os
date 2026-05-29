@@ -3,12 +3,17 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/admin-auth';
 import prisma from '@/lib/prisma';
 import { sendEmail } from '@/lib/mailer';
-import { brandedWrapper } from '@/lib/email/brandedWrapper';
+import { wrapInBrandedEmail } from '@/lib/email/brandedWrapper';
+
+interface Personalization {
+  subject: string;
+  opening: string;
+}
 
 export async function POST(req: NextRequest) {
   try {
     await requireAdmin();
-    const { business_ids, template_id, mailbox } = await req.json();
+    const { business_ids, template_id, mailbox, personalizations } = await req.json();
 
     if (!business_ids || !Array.isArray(business_ids) || business_ids.length === 0) {
       return NextResponse.json({ error: 'business_ids array is required' }, { status: 400 });
@@ -27,6 +32,9 @@ export async function POST(req: NextRequest) {
     });
 
     const mailboxIndex = typeof mailbox === 'number' ? mailbox - 1 : 0;
+
+    // Parse personalizations map if provided
+    const personalizationMap: Record<string, Personalization> = personalizations || {};
 
     let sent = 0;
     let failed = 0;
@@ -73,8 +81,21 @@ export async function POST(req: NextRequest) {
           body = body.replace(pattern, value);
         }
 
+        // Apply AI personalizations if available for this business
+        const p = personalizationMap[biz.id];
+        if (p) {
+          // Use personalized subject
+          if (p.subject) {
+            subject = p.subject;
+          }
+          // Prepend AI opening to the template body
+          if (p.opening) {
+            body = p.opening + body;
+          }
+        }
+
         // Wrap body in branded email template
-        const html = brandedWrapper({ body, preheader: subject });
+        const html = wrapInBrandedEmail(body, { preheader: subject });
 
         // Send via nodemailer using shared mailer
         const result = await sendEmail({

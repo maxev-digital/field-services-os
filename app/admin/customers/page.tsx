@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { Users, Search, Phone, Mail, FileText, Briefcase, Plus } from 'lucide-react';
+import Link from 'next/link';
 
 interface Customer {
   id: string;
@@ -62,10 +63,16 @@ export default function CustomersPage() {
           <h1 className="text-2xl font-bold text-white">Customers</h1>
           <p className="text-gray-400 text-sm mt-1">{total} total customers</p>
         </div>
-        <button onClick={() => setShowAdd(true)}
-          className="flex items-center gap-2 px-4 py-2 bg-red-700 hover:bg-red-600 text-white text-sm font-semibold rounded-lg transition-colors">
-          <Plus className="w-4 h-4" /> Add Customer
-        </button>
+        <div className="flex items-center gap-2">
+          <Link href="/admin/leads/new"
+            className="flex items-center gap-2 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white text-sm font-semibold rounded-lg transition-colors">
+            <Plus className="w-4 h-4" /> New Lead
+          </Link>
+          <button onClick={() => setShowAdd(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-red-700 hover:bg-red-600 text-white text-sm font-semibold rounded-lg transition-colors">
+            <Plus className="w-4 h-4" /> Quick Add
+          </button>
+        </div>
       </div>
 
       {/* Add form */}

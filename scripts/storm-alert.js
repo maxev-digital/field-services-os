@@ -1,255 +1,289 @@
 #!/usr/bin/env node
 /**
- * Storm Hail Alert System
- * Checks NOAA SPC for DFW-area hail events and emails info@roofworksoftexas.com.
- * Run via PM2 cron every 30 minutes.
+ * Storm Hail Alert + Auto Pipeline
  *
- * PM2 setup (run once on VPS):
- *   pm2 start /var/www/roof-works-admin/scripts/storm-alert.js \
- *     --name storm-alert --cron "0,30 * * * *" --no-autorestart
- *   pm2 save
+ * Every 30 min:
+ *   1. Checks SPC reports for TODAY and YESTERDAY (Central Time)
+ *   2. Detects any Texas hail event
+ *   3. If DFW-area hail found AND prospects don't exist yet for that date:
+ *      a. Calls /api/admin/storm/generate-leads with SPC lat/lon points (no SWDI wait)
+ *      b. Sends Telegram + email — skip-trace requires manual auth in admin panel
+ *
+ * PM2: pm2 start storm-alert.js --name storm-alert --cron "0,30 * * * *" --no-autorestart
  */
-
 'use strict';
 require('dotenv').config({ path: '/var/www/roof-works-admin/.env' });
+require('dotenv').config({ path: '/var/www/roof-works-admin/.env.local' });
 
 const nodemailer = require('nodemailer');
-const fs         = require('fs');
+const { Pool }   = require('pg');
 
-const ALERT_LOG    = '/tmp/storm_alerts.json';
-const ALERT_EMAIL  = process.env.OUTREACH_MAILBOX_1_EMAIL || 'info@roofworksoftexas.com';
-const SMTP_USER    = process.env.OUTREACH_MAILBOX_1_EMAIL;
-const SMTP_PASS    = process.env.OUTREACH_MAILBOX_1_PASS;
-const ADMIN_URL    = 'https://admin.roofworksoftexas.com/admin/storm';
+const BASE_URL       = 'http://localhost:3020';
+const INTERNAL_KEY   = process.env.ADMIN_SECRET;
+const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const TELEGRAM_CHAT  = process.env.TELEGRAM_ALLOWED_USER_ID;
+const SMTP_USER      = process.env.OUTREACH_MAILBOX_1_EMAIL;
+const SMTP_PASS      = process.env.OUTREACH_MAILBOX_1_PASS;
+const ALERT_EMAIL    = 'info@roofworksoftexas.com';
+const ADMIN_URL      = 'https://admin.roofworksoftexas.com/admin/storm/operations';
 
-// Generous DFW bounding box
-const LAT_MIN = 31.5, LAT_MAX = 34.5;
-const LON_MIN = -99.5, LON_MAX = -94.0;
+const TX_LAT_MIN = 25.8, TX_LAT_MAX = 36.5;
+const TX_LON_MIN = -106.7, TX_LON_MAX = -93.5;
 
-const DFW_COUNTIES = [
-  'Dallas','Collin','Denton','Tarrant','Rockwall',
-  'Kaufman','Johnson','Ellis','Parker','Wise'
-];
+const DFW_COUNTIES = new Set([
+  'DALLAS', 'COLLIN', 'DENTON', 'TARRANT', 'ROCKWALL',
+  'KAUFMAN', 'JOHNSON', 'ELLIS', 'PARKER', 'WISE',
+]);
 
-function ctDate() {
-  const d = new Date();
-  d.setMinutes(d.getMinutes() - 360); // UTC-6
-  const yy = String(d.getFullYear()).slice(2);
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return `${yy}${mm}${dd}`;
+const db = new Pool({ connectionString: process.env.DATABASE_URL });
+
+function getCtOffset() {
+  const now = new Date();
+  const yr  = now.getUTCFullYear();
+  const mar = new Date(Date.UTC(yr, 2, 1));
+  mar.setUTCDate(1 + ((7 - mar.getUTCDay()) % 7) + 7);
+  const nov = new Date(Date.UTC(yr, 10, 1));
+  nov.setUTCDate(1 + ((7 - nov.getUTCDay()) % 7));
+  return (now >= mar && now < nov) ? 5 : 6;
 }
 
-function hailLabel(sizeHundredths) {
-  const i = sizeHundredths / 100;
-  if (i >= 3.0) return 'CATASTROPHIC';
-  if (i >= 2.0) return 'MAJOR';
-  if (i >= 1.5) return 'SIGNIFICANT';
-  if (i >= 1.0) return 'DAMAGING';
+function ctDate(offsetDays = 0) {
+  const offset = getCtOffset();
+  const ms = Date.now() - offset * 3600000 + offsetDays * 86400000;
+  const d  = new Date(ms);
+  const yyyy = d.getUTCFullYear();
+  const mm   = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const dd   = String(d.getUTCDate()).padStart(2, '0');
+  return {
+    yymmdd:   `${String(yyyy).slice(2)}${mm}${dd}`,
+    yyyymmdd: `${yyyy}${mm}${dd}`,
+    isoDate:  `${yyyy}-${mm}-${dd}`,
+  };
+}
+
+async function fetchSpcHail(yymmdd) {
+  const url = `https://www.spc.noaa.gov/climo/reports/${yymmdd}_rpts_filtered_hail.csv`;
+  try {
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'RoofWorksAdmin/1.0' },
+      signal:  AbortSignal.timeout(12000),
+    });
+    if (!res.ok) return [];
+    const text  = await res.text();
+    const lines = text.replace(/\r/g, '').trim().split('\n');
+    if (lines.length < 2) return [];
+    return lines.slice(1).flatMap(line => {
+      const c = line.split(',');
+      if (c.length < 7) return [];
+      const sizeHundredths = parseInt(c[1], 10);
+      const lat  = parseFloat(c[5]);
+      const lon  = parseFloat(c[6]);
+      if (isNaN(lat) || isNaN(lon) || isNaN(sizeHundredths)) return [];
+      if (lat < TX_LAT_MIN || lat > TX_LAT_MAX) return [];
+      if (lon < TX_LON_MIN || lon > TX_LON_MAX) return [];
+      if (c[4]?.trim().toUpperCase() !== 'TX') return [];
+      return [{ lat, lon, size_in: sizeHundredths / 100, county: c[3]?.trim() || '', location: c[2]?.trim() || '', state: 'TX' }];
+    });
+  } catch (e) {
+    console.error(`[storm] SPC fetch error for ${yymmdd}:`, e.message);
+    return [];
+  }
+}
+
+
+const MRMS_SVC = 'http://127.0.0.1:8001';
+const DFW_LAT_MIN = 32.0, DFW_LAT_MAX = 33.9, DFW_LON_MIN = -98.5, DFW_LON_MAX = -95.5;
+
+async function fetchMrmsDfwEvents(yyyymmdd) {
+  try {
+    const res = await fetch(MRMS_SVC + '/swath/' + yyyymmdd, { signal: AbortSignal.timeout(45000) });
+    if (!res.ok) return [];
+    const gj = await res.json();
+    if (!gj.features || gj.features.length === 0) return [];
+    const events = [];
+    for (const feat of gj.features) {
+      const threshIn = (feat.properties && feat.properties.threshold_in) ? feat.properties.threshold_in : 0.5;
+      const allCoords = [];
+      const flatten = function(c) {
+        if (typeof c[0] === 'number') { allCoords.push(c); return; }
+        for (const s of c) flatten(s);
+      };
+      flatten((feat.geometry && feat.geometry.coordinates) ? feat.geometry.coordinates : []);
+      const dfwC = allCoords.filter(function(p) {
+        return p[1] >= DFW_LAT_MIN && p[1] <= DFW_LAT_MAX && p[0] >= DFW_LON_MIN && p[0] <= DFW_LON_MAX;
+      });
+      if (dfwC.length === 0) continue;
+      const lat = dfwC.reduce(function(s, c) { return s + c[1]; }, 0) / dfwC.length;
+      const lon = dfwC.reduce(function(s, c) { return s + c[0]; }, 0) / dfwC.length;
+      events.push({ lat: lat, lon: lon, size_in: threshIn, county: 'DALLAS', location: 'MRMS radar', state: 'TX' });
+    }
+    return events;
+  } catch (e) { console.error('[storm] MRMS error:', e.message); return []; }
+}
+
+async function prospectsExistForDate(isoDate) {
+  try {
+    const r = await db.query('SELECT COUNT(*) AS cnt FROM storm_prospects WHERE storm_date = $1', [isoDate]);
+    return Number(r.rows[0].cnt) > 0;
+  } catch { return false; }
+}
+
+async function logStormHistory(isoDate, events) {
+  const yyyymmdd  = isoDate.replace(/-/g, '');
+  const dfwEvents = events.filter(e => DFW_COUNTIES.has(e.county.toUpperCase()));
+  const maxHail   = events.reduce((m, e) => Math.max(m, Math.round(e.size_in * 100)), 0);
+  try {
+    await db.query(`
+      INSERT INTO storm_history (date, hail_count, wind_count, torn_count,
+        dfw_hail, dfw_wind, dfw_torn, max_hail, states_hail, has_dfw_hail, has_dfw_torn, updated_at)
+      VALUES ($1, $2, 0, 0, $3, 0, 0, $4, 'TX', $5, false, NOW())
+      ON CONFLICT (date) DO UPDATE SET
+        hail_count   = GREATEST(storm_history.hail_count, EXCLUDED.hail_count),
+        dfw_hail     = GREATEST(storm_history.dfw_hail, EXCLUDED.dfw_hail),
+        max_hail     = GREATEST(storm_history.max_hail, EXCLUDED.max_hail),
+        has_dfw_hail = EXCLUDED.has_dfw_hail,
+        updated_at   = NOW()
+    `, [yyyymmdd, events.length, dfwEvents.length, maxHail, dfwEvents.length > 0]);
+  } catch (e) { console.error('[storm] storm_history update error:', e.message); }
+}
+
+async function apiPost(path, body, timeoutMs = 120000) {
+  const res = await fetch(`${BASE_URL}${path}`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json', 'x-internal-key': INTERNAL_KEY },
+    body:    JSON.stringify(body),
+    signal:  AbortSignal.timeout(timeoutMs),
+  });
+  return res.json();
+}
+
+// Lead generation only — skip-trace requires manual authorization in admin panel
+async function runPipeline(isoDate, yyyymmdd, dfwEvents) {
+  const results = { leads: 0, errors: [] };
+  console.log(`[storm] Generating leads for ${isoDate} (${dfwEvents.length} SPC points)`);
+  try {
+    const spcPoints = dfwEvents.map(e => ({
+      lat: e.lat, lon: e.lon, size_in: e.size_in, county: e.county, location: e.location,
+    }));
+    const d = await apiPost('/api/admin/storm/generate-leads', {
+      date: yyyymmdd, spc_points: spcPoints, minHailSize: 0.75, maxProperties: 5000,
+    }, 180000);
+    results.leads = d.created ?? 0;
+    console.log(`[storm] Generated ${results.leads} leads (total_found: ${d.total_found ?? 0})`);
+  } catch (e) {
+    results.errors.push(`generate-leads: ${e.message}`);
+    console.error('[storm] generate-leads error:', e.message);
+  }
+  return results;
+}
+
+async function sendTelegram(msg) {
+  if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT) return;
+  try {
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: TELEGRAM_CHAT, text: msg, parse_mode: 'HTML' }),
+      signal: AbortSignal.timeout(45000),
+    });
+  } catch (e) { console.error('[storm] Telegram error:', e.message); }
+}
+
+async function sendEmail(subject, html) {
+  if (!SMTP_USER || !SMTP_PASS) return;
+  try {
+    const t = nodemailer.createTransport({
+      host: 'smtp.hostinger.com', port: 465, secure: true,
+      auth: { user: SMTP_USER, pass: SMTP_PASS },
+    });
+    await t.sendMail({ from: `"Roof Works Storm Alert" <${SMTP_USER}>`, to: ALERT_EMAIL, subject, html });
+  } catch (e) { console.error('[storm] Email error:', e.message); }
+}
+
+function hailLabel(sizeIn) {
+  if (sizeIn >= 3.0) return 'CATASTROPHIC';
+  if (sizeIn >= 2.0) return 'MAJOR';
+  if (sizeIn >= 1.5) return 'SIGNIFICANT';
+  if (sizeIn >= 1.0) return 'DAMAGING';
   return 'MODERATE';
 }
 
-function hailColor(sizeHundredths) {
-  const i = sizeHundredths / 100;
-  if (i >= 3.0) return '#7c3aed';
-  if (i >= 2.0) return '#dc2626';
-  if (i >= 1.5) return '#ea580c';
-  if (i >= 1.0) return '#d97706';
-  return '#16a34a';
-}
-
-async function fetchDfwHail(date) {
-  const url = `https://www.spc.noaa.gov/climo/reports/${date}_rpts_filtered_hail.csv`;
-  const res = await fetch(url, {
-    headers: { 'User-Agent': 'RoofWorksAdmin/1.0' },
-    signal: AbortSignal.timeout(12000),
-  });
-  if (!res.ok) return [];
-  const text = await res.text();
-  const lines = text.replace(/\r/g, '').trim().split('\n');
-  if (lines.length < 2) return [];
-  return lines.slice(1).flatMap(line => {
-    const c = line.split(',');
-    if (c.length < 7) return [];
-    const lat  = parseFloat(c[5]);
-    const lon  = parseFloat(c[6]);
-    const size = parseInt(c[1], 10);
-    if (isNaN(lat) || isNaN(lon) || isNaN(size)) return [];
-    if (lat < LAT_MIN || lat > LAT_MAX || lon < LON_MIN || lon > LON_MAX) return [];
-    return [{ time: c[0]?.trim(), size, sizeIn: (size / 100).toFixed(2), location: c[2]?.trim(), county: c[3]?.trim(), state: c[4]?.trim(), lat, lon }];
-  });
-}
-
-function loadLog() {
-  try { return JSON.parse(fs.readFileSync(ALERT_LOG, 'utf8')); } catch { return {}; }
-}
-function saveLog(log) {
-  fs.writeFileSync(ALERT_LOG, JSON.stringify(log, null, 2));
-}
-
-function buildEmail(events, date) {
-  const byCounty = {};
-  for (const e of events) {
-    if (!byCounty[e.county]) byCounty[e.county] = { events: [], maxSize: 0, isDfw: DFW_COUNTIES.includes(e.county) };
-    byCounty[e.county].events.push(e);
-    if (e.size > byCounty[e.county].maxSize) byCounty[e.county].maxSize = e.size;
-  }
-
-  const sorted = Object.entries(byCounty).sort((a, b) => b[1].maxSize - a[1].maxSize);
-  const maxHail = Math.max(...events.map(e => e.size));
-  const dfwCount = sorted.filter(([, d]) => d.isDfw).length;
-
-  const rows = sorted.map(([county, d]) => `
-    <tr>
-      <td style="padding:10px 12px;border-bottom:1px solid #1f2937;font-weight:${d.isDfw ? 'bold' : 'normal'};color:${d.isDfw ? '#fbbf24' : '#e5e7eb'}">
-        ${d.isDfw ? '⚠ ' : ''}${county}, ${d.events[0].state}
-      </td>
-      <td style="padding:10px 12px;border-bottom:1px solid #1f2937;font-weight:bold;color:${hailColor(d.maxSize)}">
-        ${(d.maxSize / 100).toFixed(2)}" — ${hailLabel(d.maxSize)}
-      </td>
-      <td style="padding:10px 12px;border-bottom:1px solid #1f2937;color:#9ca3af;text-align:center">
-        ${d.events.length}
-      </td>
-    </tr>`).join('');
-
-  const dateFormatted = `20${date.slice(0,2)}-${date.slice(2,4)}-${date.slice(4,6)}`;
-
-  const html = `
-<!DOCTYPE html>
-<html>
-<body style="margin:0;padding:0;background:#0a0a0a;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif">
-<div style="max-width:600px;margin:0 auto;padding:24px">
-
-  <!-- Header -->
-  <div style="background:#111827;border:1px solid #374151;border-radius:12px;padding:24px;margin-bottom:16px">
-    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
-      <span style="font-size:28px">⛈️</span>
-      <div>
-        <h1 style="margin:0;color:#fbbf24;font-size:20px">DFW Hail Alert</h1>
-        <p style="margin:4px 0 0;color:#6b7280;font-size:13px">${dateFormatted} · NOAA SPC Observer Reports</p>
-      </div>
-    </div>
-
-    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
-      <div style="background:#1f2937;border-radius:8px;padding:12px;text-align:center">
-        <div style="font-size:24px;font-weight:bold;color:#f97316">${(maxHail/100).toFixed(2)}"</div>
-        <div style="font-size:11px;color:#6b7280;margin-top:2px">Largest Hail</div>
-      </div>
-      <div style="background:#1f2937;border-radius:8px;padding:12px;text-align:center">
-        <div style="font-size:24px;font-weight:bold;color:#60a5fa">${events.length}</div>
-        <div style="font-size:11px;color:#6b7280;margin-top:2px">Total Reports</div>
-      </div>
-      <div style="background:${dfwCount > 0 ? '#7f1d1d' : '#1f2937'};border-radius:8px;padding:12px;text-align:center">
-        <div style="font-size:24px;font-weight:bold;color:${dfwCount > 0 ? '#fca5a5' : '#9ca3af'}">${dfwCount}</div>
-        <div style="font-size:11px;color:#6b7280;margin-top:2px">Core DFW Counties</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- County table -->
-  <div style="background:#111827;border:1px solid #374151;border-radius:12px;overflow:hidden;margin-bottom:16px">
-    <div style="padding:12px 16px;border-bottom:1px solid #1f2937;background:#0f172a">
-      <span style="color:#9ca3af;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em">Affected Counties</span>
-    </div>
-    <table style="width:100%;border-collapse:collapse">
-      <thead>
-        <tr style="background:#0f172a">
-          <th style="padding:8px 12px;text-align:left;color:#6b7280;font-size:11px;font-weight:600;text-transform:uppercase">County</th>
-          <th style="padding:8px 12px;text-align:left;color:#6b7280;font-size:11px;font-weight:600;text-transform:uppercase">Max Hail</th>
-          <th style="padding:8px 12px;text-align:center;color:#6b7280;font-size:11px;font-weight:600;text-transform:uppercase">Reports</th>
-        </tr>
-      </thead>
-      <tbody>${rows}</tbody>
-    </table>
-  </div>
-
-  <!-- CTA -->
-  <div style="text-align:center;margin-bottom:16px">
-    <a href="${ADMIN_URL}" style="display:inline-block;background:#ca8a04;color:#fff;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:700;font-size:15px">
-      Open Storm Dashboard →
-    </a>
-  </div>
-
-  <p style="color:#374151;font-size:11px;text-align:center;margin:0">
-    Roof Works of Texas · Automated Storm Alert · Data: NOAA SPC<br>
-    <a href="${ADMIN_URL}" style="color:#4b5563">Manage alerts in admin panel</a>
-  </p>
-</div>
-</body>
-</html>`;
-
-  const maxCounty = sorted[0][0];
-  const subject = dfwCount > 0
-    ? `⚠️ DFW Hail Alert: ${(maxHail/100).toFixed(2)}" in ${dfwCount} core county${dfwCount > 1 ? 'ies' : ''} — ${dateFormatted}`
-    : `🌩 Nearby Hail: ${(maxHail/100).toFixed(2)}" near ${maxCounty} — ${dateFormatted}`;
-
-  return { html, subject };
-}
-
-async function sendAlert(events, date) {
-  if (!SMTP_PASS) {
-    console.error('[storm-alert] SMTP password not set — add OUTREACH_MAILBOX_1_PASS to .env');
-    return false;
-  }
-
-  const transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST || 'smtp.hostinger.com',
-    port: parseInt(process.env.SMTP_PORT || '465'),
-    secure: true,
-    auth: { user: SMTP_USER, pass: SMTP_PASS },
-  });
-
-  const { html, subject } = buildEmail(events, date);
-
-  await transporter.sendMail({
-    from: `"Roof Works Storm Alert" <${SMTP_USER}>`,
-    to: ALERT_EMAIL,
-    subject,
-    html,
-  });
-
-  return true;
-}
-
 async function main() {
-  const date = ctDate();
-  console.log(`[storm-alert] ${new Date().toISOString()} — checking SPC for ${date}`);
+  console.log(`[storm] ${new Date().toISOString()} — checking SPC (CT: ${ctDate().isoDate})`);
+  const datesToCheck = [ctDate(0), ctDate(-1), ctDate(-2)];
 
-  let events;
-  try {
-    events = await fetchDfwHail(date);
-  } catch (e) {
-    console.error('[storm-alert] Fetch failed:', e.message);
-    return;
-  }
+  for (const dateObj of datesToCheck) {
+    const { yymmdd, yyyymmdd, isoDate } = dateObj;
+    console.log(`[storm] Checking SPC for ${isoDate} (${yymmdd})`);
 
-  console.log(`[storm-alert] ${events.length} DFW-area hail events found`);
-
-  if (events.length === 0) {
-    console.log('[storm-alert] No events — done');
-    return;
-  }
-
-  const log = loadLog();
-  const prev = log[date];
-
-  // Only alert if this is new or there are more reports than last time
-  if (prev && prev.count >= events.length) {
-    console.log(`[storm-alert] Already alerted for ${date} (${prev.count} events) — skipping`);
-    return;
-  }
-
-  console.log(`[storm-alert] Sending alert email to ${ALERT_EMAIL}...`);
-  try {
-    const sent = await sendAlert(events, date);
-    if (sent) {
-      log[date] = { count: events.length, sentAt: new Date().toISOString() };
-      saveLog(log);
-      console.log(`[storm-alert] ✓ Alert sent for ${events.length} events`);
+    const allTxEvents = await fetchSpcHail(yymmdd);
+    let dfwEvents
+    let source = 'SPC';
+    if (allTxEvents.length === 0) {
+      console.log('[storm] No TX hail in SPC ' + yymmdd + ' — checking MRMS');
+      const mrmsEvents = await fetchMrmsDfwEvents(yyyymmdd);
+      if (mrmsEvents.length === 0) { console.log('[storm] No DFW hail in MRMS ' + yyyymmdd); continue; }
+      console.log('[storm] MRMS: ' + mrmsEvents.length + ' DFW zone(s) on ' + yyyymmdd);
+      dfwEvents = mrmsEvents;
+      source = 'MRMS';
+      await logStormHistory(isoDate, mrmsEvents);
+    } else {
+      dfwEvents = allTxEvents.filter(e => DFW_COUNTIES.has(e.county.toUpperCase()));
+      console.log(`[storm] ${isoDate}: ${allTxEvents.length} TX events, ${dfwEvents.length} DFW events`);
+      await logStormHistory(isoDate, allTxEvents);
+      if (dfwEvents.length === 0) {
+        const maxHail  = Math.max(...allTxEvents.map(e => e.size_in));
+        const counties = [...new Set(allTxEvents.map(e => e.county))].slice(0, 5).join(', ');
+        await sendTelegram(
+        `<b>⛈ TX Storm ${isoDate}</b>\n${allTxEvents.length} hail reports — outside DFW\n` +
+        `Counties: ${counties}\nMax: ${maxHail.toFixed(2)}" ${hailLabel(maxHail)}`
+        );
+        continue;
+      }
     }
-  } catch (e) {
-    console.error('[storm-alert] Email send failed:', e.message);
+
+    const alreadyRan = await prospectsExistForDate(isoDate);
+    if (alreadyRan) { console.log(`[storm] ${isoDate}: prospects already exist — skipping`); continue; }
+
+    const maxHail  = Math.max(...dfwEvents.map(e => e.size_in));
+    const counties = [...new Set(dfwEvents.map(e => e.county))].slice(0, 5).join(', ');
+    console.log(`[storm] DFW hail ${isoDate}: max ${maxHail}" — generating leads`);
+
+    await sendTelegram(
+      `<b>🚨 DFW Hail ${isoDate} — Generating Leads</b>\n` +
+      `${dfwEvents.length} reports · Max: ${maxHail.toFixed(2)}" ${hailLabel(maxHail)}\n` +
+      `Counties: ${counties}\nBuilding prospect list now...`
+    );
+
+    const results = await runPipeline(isoDate, yyyymmdd, dfwEvents);
+
+    const status = results.errors.length ? '⚠️ Partial' : '✅ Leads Ready';
+    await sendTelegram(
+      `<b>${status} — DFW Storm ${isoDate}</b>\n` +
+      `📍 Max hail: ${maxHail.toFixed(2)}" (${hailLabel(maxHail)})\n` +
+      `🏠 Leads generated: ${results.leads.toLocaleString()}\n` +
+      `📱 Skip-trace: authorize in batches from admin panel\n` +
+      (results.errors.length ? `⚠️ Errors: ${results.errors.join('; ')}\n` : '') +
+      `<a href="${ADMIN_URL}">Authorize Skip-Trace →</a>`
+    );
+    await sendEmail(
+      `DFW Storm ${isoDate}: ${results.leads} leads ready`,
+      `<h2>Storm Leads Ready — ${isoDate}</h2>
+       <p><strong>Max Hail:</strong> ${maxHail.toFixed(2)}" (${hailLabel(maxHail)})</p>
+       <p><strong>DFW Reports:</strong> ${dfwEvents.length}</p>
+       <p><strong>Leads Generated:</strong> ${results.leads.toLocaleString()}</p>
+       <p><strong>Next Step:</strong> Authorize skip-trace in batches from the Operations page.</p>
+       ${results.errors.length ? `<p><strong>Errors:</strong> ${results.errors.join('; ')}</p>` : ''}
+       <p><a href="${ADMIN_URL}">Open Storm Operations →</a></p>`
+    );
   }
+
+  await db.end().catch(() => {});
+  console.log('[storm] Done');
 }
 
-main().catch(e => { console.error('[storm-alert] Fatal:', e.message); process.exit(1); });
+main().catch(e => {
+  console.error('[storm] Fatal error:', e);
+  db.end().catch(() => {});
+  process.exit(1);
+});

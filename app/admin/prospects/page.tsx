@@ -1,8 +1,10 @@
 'use client'
+import EvOrderWidget from '@/components/EvOrderWidget'
 
-import { useState, useEffect, Fragment } from 'react'
+import { Suspense, useState, useEffect, useCallback, Fragment, useRef } from 'react'
+import { useSearchParams } from 'next/navigation'
 import {
-  ChevronDown, ChevronRight, Mail, MessageSquare, Phone, Save, Send, MapPin, Download, UserPlus, X, Search,
+  ChevronDown, ChevronRight, Mail, MessageSquare, Phone, Save, Send, MapPin, Download, UserPlus, X, Search, Zap, MailCheck,
 } from 'lucide-react'
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -38,22 +40,7 @@ interface Template {
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const DFW_CITIES = [
-  'Plano', 'Frisco', 'McKinney', 'Allen', 'Richardson', 'Garland', 'Mesquite',
-  'Irving', 'Carrollton', 'Lewisville', 'Flower Mound', 'Denton', 'Grand Prairie',
-  'Arlington', 'Euless', 'Bedford', 'Hurst', 'Grapevine', 'Coppell', 'Southlake',
-  'Keller', 'North Richland Hills', 'Colleyville', 'Mansfield', 'Rowlett',
-  'Wylie', 'Sachse', 'Murphy', 'Fate', 'Rockwall', 'Forney', 'Prosper', 'Celina',
-]
-
 const DAMAGE_TYPES = ['Hail', 'Wind', 'Fire', 'Water', 'Storm']
-
-const NEIGHBORHOODS = [
-  'Stonebriar', 'Legacy', 'Starwood', 'Willow Bend', 'Lakewood', 'Preston Hollow',
-  'Bent Tree', 'Eldorado', 'Fairview', 'Twin Creeks',
-]
-
-const SOURCES = ['Storm Report', 'Door Knock', 'Referral', 'Permit Pull', 'Insurance Lead', 'Web Form', 'Other']
 
 const OUTREACH_STATUSES: { value: ProspectStatus | 'all'; label: string }[] = [
   { value: 'all', label: 'All Statuses' },
@@ -112,8 +99,10 @@ function ExpandedRow({
   const [sending, setSending] = useState(false)
   const [sendResult, setSendResult] = useState<{ ok: boolean; msg: string } | null>(null)
   const [copiedScript, setCopiedScript] = useState<number | null>(null)
+  const [markingReplied, setMarkingReplied] = useState(false)
+  const [repliedDone, setRepliedDone] = useState(false)
 
-  const firstName = prospect.name.trim().split(' ')[0]
+  const firstName = (prospect.name || "Homeowner").trim().split(" ")[0]
 
   const PHONE_SCRIPTS = [
     {
@@ -168,7 +157,7 @@ function ExpandedRow({
         body: JSON.stringify({
           prospect_ids: [prospect.id],
           template_id: selectedTemplateId,
-          mailbox: 1,
+          mailbox: 3,
           custom_subject: subject,
           custom_body: body,
         }),
@@ -207,6 +196,23 @@ function ExpandedRow({
     } finally {
       setSaving(false)
     }
+  }
+
+  const markAsReplied = async () => {
+    setMarkingReplied(true)
+    const note = `Email reply flagged ${new Date().toLocaleDateString('en-US')}`
+    const newNotes = notes ? `${notes}\n${note}` : note
+    await fetch(`/api/admin/prospects/${prospect.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'PENDING_CONFIRMATION', notes: newNotes }),
+    })
+    onSave({ status: 'PENDING_CONFIRMATION', notes: newNotes })
+    setStatus('PENDING_CONFIRMATION' as any)
+    setNotes(newNotes)
+    setMarkingReplied(false)
+    setRepliedDone(true)
+    setTimeout(() => setRepliedDone(false), 3000)
   }
 
   return (
@@ -258,6 +264,15 @@ function ExpandedRow({
               <p className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-1">Emails Sent</p>
               <p className="text-sm text-gray-300">{prospect._count?.outreach_history ?? 0}</p>
             </div>
+
+            {/* EagleView Report */}
+            <EvOrderWidget
+              address={prospect.address}
+              city={prospect.city}
+              zip={prospect.zip || ''}
+              prospectId={prospect.id}
+              compact={true}
+            />
           </div>
 
           {/* Middle — Contact info */}
@@ -369,7 +384,7 @@ function ExpandedRow({
                 <div>
                   <label className="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-2">Send From</label>
                   <div className="w-full text-sm px-3 py-2.5 bg-gray-800 border border-gray-600 rounded text-gray-400">
-                    info@roofworksoftexas.com
+                    noreply@roofworksoftexas.com
                   </div>
                 </div>
                 <div className="bg-gray-800 border border-gray-700 rounded p-3">
@@ -396,7 +411,7 @@ function ExpandedRow({
                   placeholder="Email body (HTML supported)"
                   className="w-full text-base px-3 py-2.5 bg-gray-800 border border-gray-600 rounded text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none leading-relaxed font-mono"
                 />
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 flex-wrap">
                   <button
                     onClick={sendEmail}
                     disabled={sending || !toEmail || !subject || !body || !selectedTemplateId}
@@ -404,6 +419,15 @@ function ExpandedRow({
                   >
                     <Send className="w-4 h-4" />
                     {sending ? 'Sending...' : 'Send Email'}
+                  </button>
+                  <button
+                    onClick={markAsReplied}
+                    disabled={markingReplied}
+                    title="They replied to your email — flags them as a pending lead for manual confirmation"
+                    className="flex items-center gap-2 px-4 py-2.5 bg-purple-700 text-white text-sm font-bold rounded hover:bg-purple-600 transition-colors disabled:opacity-50"
+                  >
+                    <MailCheck className="w-4 h-4" />
+                    {markingReplied ? 'Flagging...' : repliedDone ? 'Flagged!' : 'Mark as Replied'}
                   </button>
                   {sendResult && (
                     <span className={`text-sm font-semibold ${sendResult.ok ? 'text-green-400' : 'text-red-400'}`}>
@@ -457,12 +481,14 @@ function ExpandedRow({
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
-export default function StormProspects() {
+function StormProspectsInner() {
+  const searchParamsHook = useSearchParams()
   const [prospects, setProspects] = useState<Prospect[]>([])
   const [total, setTotal] = useState(0)
   const [pages, setPages] = useState(1)
   const [loading, setLoading] = useState(false)
   const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(100)
 
   // Filters
   const [searchInput, setSearchInput] = useState('')
@@ -472,8 +498,18 @@ export default function StormProspects() {
   const [leadStatus, setLeadStatus] = useState('')
   const [hasEmail, setHasEmail] = useState(false)
   const [hasPhone, setHasPhone] = useState(false)
+  const [noPhone, setNoPhone] = useState(false)
   const [neighborhood, setNeighborhood] = useState('')
   const [source, setSource] = useState('')
+
+  // Dynamic filter options — loaded from DB
+  const [filterCities, setFilterCities] = useState<string[]>([])
+  const [filterNeighborhoods, setFilterNeighborhoods] = useState<string[]>([])
+  const [filterSources, setFilterSources] = useState<string[]>([])
+  const [stormDate, setStormDate] = useState('')
+
+  // Zone proximity filter (from storm zones page)
+  const [zoneFilter, setZoneFilter] = useState<{ lat: number; lon: number; radius_miles: number; storm_date: string; label: string } | null>(null)
 
   // Table state
   const [expanded, setExpanded] = useState<string | null>(null)
@@ -489,11 +525,31 @@ export default function StormProspects() {
 
   // Skip trace
   const [skipTracing, setSkipTracing] = useState(false)
-  const [skipResult, setSkipResult] = useState<{ found: number; updated: number; already_had_phone: number } | null>(null)
+  const [skipResult, setSkipResult] = useState<{ found: number; updated: number; already_had_phone: number; error?: string } | null>(null)
 
   // Voice campaign
   const [voiceSending, setVoiceSending] = useState(false)
   const [voiceResult, setVoiceResult] = useState<{ dispatched: number; skipped: number; errors: number } | null>(null)
+  const [ivrSending, setIvrSending] = useState(false)
+  const [ivrResult, setIvrResult] = useState<{ dispatched: number; skipped: number; errors: number; script?: string } | null>(null)
+  // Multi-Channel Campaign
+  const [multiSending, setMultiSending] = useState(false)
+  const [multiResult, setMultiResult] = useState<{ ivr_dispatched: number; ivr_skipped: number; email_sent: number; email_skipped: number } | null>(null)
+  const [ivrScripts, setIvrScripts] = useState<{ id: string; name: string; filename: string }[]>([])
+  const [ivrScriptFile, setIvrScriptFile] = useState('script-new.mp3')
+  const [segments, setSegments] = useState<{ city: string; total: number; callable: number }[]>([])
+  const [cityLaunching, setCityLaunching] = useState<string | null>(null)
+  const [cityResult, setCityResult] = useState<{ city: string; dispatched: number } | null>(null)
+  const [testPhone, setTestPhone] = useState('')
+  const [testCalling, setTestCalling] = useState(false)
+  const [testResult, setTestResult] = useState<string | null>(null)
+
+  // IVR script upload
+  const [uploadOpen, setUploadOpen] = useState(false)
+  const [uploadName, setUploadName] = useState('')
+  const [uploadFile, setUploadFile] = useState<File | null>(null)
+  const [uploading, setUploading] = useState(false)
+  const uploadInputRef = useRef<HTMLInputElement>(null)
 
 
   // Convert to Lead
@@ -521,8 +577,27 @@ export default function StormProspects() {
   const [addSaving, setAddSaving] = useState(false)
   const [importSaving, setImportSaving] = useState(false)
 
+  // Read zone filter from URL on mount
+  useEffect(() => {
+    const lat = searchParamsHook.get('lat')
+    const lon = searchParamsHook.get('lon')
+    const radius = searchParamsHook.get('radius_miles')
+    const sd = searchParamsHook.get('storm_date')
+    const label = searchParamsHook.get('label') || 'Storm Zone'
+    if (lat && lon && radius) {
+      setZoneFilter({ lat: parseFloat(lat), lon: parseFloat(lon), radius_miles: parseFloat(radius), storm_date: sd || '', label })
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Load test phone from localStorage (default = Nash's number)
+  useEffect(() => {
+    const saved = localStorage.getItem('ivr_test_phone')
+    setTestPhone(saved || '2142320222')
+  }, [])
+
   // Load templates on mount
   useEffect(() => {
+    fetch('/api/admin/prospects/segments').then(r => r.json()).then(d => { if (d.segments) setSegments(d.segments) }).catch(() => {})
     fetch('/api/admin/templates')
       .then(r => r.json())
       .then(d => {
@@ -534,18 +609,62 @@ export default function StormProspects() {
       .catch(() => {})
   }, [])
 
+  // Load IVR scripts
+  useEffect(() => {
+    fetch('/api/admin/ivr-scripts')
+      .then(r => r.json())
+      .then(d => {
+        if (d.scripts?.length) {
+          setIvrScripts(d.scripts)
+          setIvrScriptFile(d.scripts[0].filename)
+        }
+      })
+      .catch(() => {})
+  }, [])
+
+  // Load dynamic filter options from DB
+  useEffect(() => {
+    fetch('/api/admin/prospects/filters')
+      .then(r => r.json())
+      .then(d => {
+        if (d.cities)        setFilterCities(d.cities)
+        if (d.neighborhoods) setFilterNeighborhoods(d.neighborhoods)
+        if (d.sources)       setFilterSources(d.sources)
+      })
+      .catch(() => {})
+  }, [])
+
   // Fetch prospects
   const fetchProspects = async (p = 1) => {
     setLoading(true)
-    const params = new URLSearchParams({ page: String(p), limit: '50' })
+    const params = new URLSearchParams({ page: String(p), limit: String(pageSize) })
     if (search) params.set('search', search)
     if (city) params.set('city', city)
     if (damageType) params.set('damage_type', damageType)
     if (leadStatus && leadStatus !== 'all') params.set('status', leadStatus)
     if (hasEmail) params.set('has_email', '1')
     if (hasPhone) params.set('has_phone', '1')
+    if (noPhone)  params.set('no_phone',  '1')
     if (neighborhood) params.set('neighborhood', neighborhood)
     if (source) params.set('source', source)
+    if (stormDate) params.set('storm_date', stormDate)
+    // Use zoneFilter state or fall back to URL params directly (handles first-render timing)
+    const activeGeo = zoneFilter || (() => {
+      const _lat    = searchParamsHook.get('lat')
+      const _lon    = searchParamsHook.get('lon')
+      const _radius = searchParamsHook.get('radius_miles')
+      const _sd     = searchParamsHook.get('storm_date')
+      if (_lat && _lon && _radius) {
+        return { lat: parseFloat(_lat), lon: parseFloat(_lon), radius_miles: parseFloat(_radius), storm_date: _sd || '' }
+      }
+      return null
+    })()
+    if (activeGeo) {
+      params.set('lat', String(activeGeo.lat))
+      params.set('lon', String(activeGeo.lon))
+      params.set('radius_miles', String(activeGeo.radius_miles))
+      if (activeGeo.storm_date) params.set('storm_date', activeGeo.storm_date)
+    }
     try {
       const res = await fetch(`/api/admin/prospects?${params}`)
       const d = await res.json()
@@ -557,7 +676,8 @@ export default function StormProspects() {
     }
   }
 
-  useEffect(() => { fetchProspects(page) }, [page]) // eslint-disable-line react-hooks/exhaustive-deps
+  const filterKey = `${search}|${city}|${damageType}|${leadStatus}|${hasEmail}|${hasPhone}|${noPhone}|${neighborhood}|${source}|${stormDate}|${pageSize}|${JSON.stringify(zoneFilter)}`
+  useEffect(() => { fetchProspects(page) }, [page, filterKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleFind = () => {
     setSearch(searchInput)
@@ -636,7 +756,7 @@ export default function StormProspects() {
         body: JSON.stringify({
           prospect_ids: emailTargets.map(p => p.id),
           template_id: bulkTemplateId,
-          mailbox: 1,
+          mailbox: 3,
         }),
       })
       const d = await res.json()
@@ -665,12 +785,63 @@ export default function StormProspects() {
         body: JSON.stringify({ prospect_ids: targets.map(p => p.id) }),
       })
       const d = await res.json()
-      setSkipResult({ found: d.found ?? 0, updated: d.updated ?? 0, already_had_phone: d.already_had_phone ?? 0 })
-      fetchProspects(page)
+      if (d.error) {
+        setSkipResult({ found: d.found ?? 0, updated: d.updated ?? 0, already_had_phone: 0, error: d.error })
+      } else {
+        setSkipResult({ found: d.found ?? 0, updated: d.updated ?? 0, already_had_phone: d.already_had_phone ?? 0 })
+        fetchProspects(page)
+      }
     } catch {
-      setSkipResult({ found: 0, updated: 0, already_had_phone: 0 })
+      setSkipResult({ found: 0, updated: 0, already_had_phone: 0, error: 'Network error — check console' })
     } finally {
       setSkipTracing(false)
+    }
+  }
+
+  const [enrichingAll, setEnrichingAll] = useState(false)
+  const [enrichAllResult, setEnrichAllResult] = useState<{ found: number; updated: number; total: number } | null>(null)
+
+  const enrichAllFiltered = async () => {
+    // Fetch ALL IDs matching current filters (no pagination)
+    const params = new URLSearchParams({ page: '1', limit: '9999' })
+    if (search)      params.set('search', search)
+    if (city)        params.set('city', city)
+    if (stormDate)   params.set('storm_date', stormDate)
+    if (leadStatus)  params.set('status', leadStatus)
+    if (source)      params.set('source', source)
+    if (neighborhood) params.set('neighborhood', neighborhood)
+    params.set('has_phone', 'false')
+
+    setEnrichingAll(true)
+    setEnrichAllResult(null)
+    try {
+      const res  = await fetch(`/api/admin/prospects?${params}`)
+      const data = await res.json()
+      const ids: string[] = (data.prospects || []).filter((p: any) => !p.phone).map((p: any) => p.id)
+
+      if (!ids.length) { alert('No unenriched prospects match current filters'); setEnrichingAll(false); return }
+      if (!confirm(`Enrich ALL ${ids.length} prospects matching current filters?\n\nEstimated cost: ~$${(ids.length * 0.12).toFixed(2)} from BatchData.`)) { setEnrichingAll(false); return }
+
+      // Send in chunks of 200
+      const CHUNK = 200
+      let totalFound = 0, totalUpdated = 0
+      for (let i = 0; i < ids.length; i += CHUNK) {
+        const chunk = ids.slice(i, i + CHUNK)
+        const r = await fetch('/api/admin/prospects/skip-trace', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prospect_ids: chunk }),
+        })
+        const d = await r.json()
+        totalFound   += d.found   ?? 0
+        totalUpdated += d.updated ?? 0
+      }
+      setEnrichAllResult({ found: totalFound, updated: totalUpdated, total: ids.length })
+      fetchProspects(page)
+    } catch (e) {
+      alert('Enrichment failed — check console')
+    } finally {
+      setEnrichingAll(false)
     }
   }
 
@@ -706,6 +877,114 @@ Calling from (214) 491-5254 via Retell AI.`)) return
     }
   }
 
+
+  const launchMultiChannel = async () => {
+    if (!bulkTemplateId) { alert('Select an email template first'); return }
+    const base = selected.size > 0 ? prospects.filter(p => selected.has(p.id)) : prospects
+    const phoneTargets = base.filter(p => p.phone)
+    const emailTargets = base.filter(p => p.email)
+    if (!phoneTargets.length && !emailTargets.length) { alert('No prospects with phones or emails in selection'); return }
+    const ivrCount   = phoneTargets.length
+    const emailCount = emailTargets.length
+    if (!confirm(`Launch multi-channel campaign?\n\n📞 IVR calls: ${ivrCount} prospects\n📧 Emails: ${emailCount} prospects\n\nBoth will fire simultaneously.`)) return
+    setMultiSending(true)
+    setMultiResult(null)
+    const [ivrRes, emailRes] = await Promise.allSettled([
+      ivrCount > 0
+        ? fetch('/api/admin/outreach/ivr-campaign', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prospect_ids: phoneTargets.map(p => p.id), script_filename: ivrScriptFile }),
+          }).then(r => r.json())
+        : Promise.resolve({ dispatched: 0, skipped: 0, errors: [] }),
+      emailCount > 0
+        ? fetch('/api/admin/outreach/send', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prospect_ids: emailTargets.map(p => p.id), template_id: bulkTemplateId, mailbox: 3 }),
+          }).then(r => r.json())
+        : Promise.resolve({ sent: 0, skipped: 0 }),
+    ])
+    const ivr   = ivrRes.status   === 'fulfilled' ? ivrRes.value   : { dispatched: 0, skipped: ivrCount,   errors: [] }
+    const email = emailRes.status === 'fulfilled' ? emailRes.value : { sent: 0,        skipped: emailCount }
+    setMultiResult({
+      ivr_dispatched:  ivr.dispatched   ?? 0,
+      ivr_skipped:     ivr.skipped      ?? 0,
+      email_sent:      email.sent       ?? 0,
+      email_skipped:   email.skipped    ?? 0,
+    })
+    setMultiSending(false)
+    fetchProspects(page)
+  }
+
+  const launchIvrCampaign = async () => {
+    const targets = selected.size > 0
+      ? prospects.filter(p => selected.has(p.id))
+      : prospects.filter(p => p.phone)
+    const phoneTargets = targets.filter(p => p.phone)
+    if (!phoneTargets.length) { alert('No prospects with phone numbers in selection'); return }
+    if (!confirm()) return
+    setIvrSending(true)
+    setIvrResult(null)
+    try {
+      const res = await fetch('/api/admin/outreach/ivr-campaign', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prospect_ids: phoneTargets.map(p => p.id), script_filename: ivrScriptFile }),
+      })
+      const d = await res.json()
+      setIvrResult({
+        dispatched: d.dispatched ?? 0,
+        skipped: d.skipped ?? 0,
+        errors: d.errors?.length ?? 0,
+        script: d.script,
+      })
+      fetchProspects(page)
+    } catch {
+      setIvrResult({ dispatched: 0, skipped: 0, errors: phoneTargets.length })
+    } finally {
+      setIvrSending(false)
+    }
+  }
+
+  const handleScriptUpload = async () => {
+    if (!uploadName.trim() || !uploadFile) return
+    setUploading(true)
+    try {
+      const form = new FormData()
+      form.append('name', uploadName.trim())
+      form.append('file', uploadFile)
+      const res = await fetch('/api/admin/ivr-scripts', { method: 'POST', body: form })
+      const d = await res.json()
+      if (!res.ok) { alert(d.error || 'Upload failed'); return }
+      setIvrScripts(prev => [...prev, d.script])
+      setIvrScriptFile(d.script.filename)
+      setUploadOpen(false)
+      setUploadName('')
+      setUploadFile(null)
+    } catch { alert('Upload failed') }
+    finally { setUploading(false) }
+  }
+
+  const fireTestCall = async () => {
+    const phone = testPhone.trim()
+    if (!phone) { alert('Enter your test phone number first'); return }
+    localStorage.setItem('ivr_test_phone', phone)
+    setTestCalling(true)
+    setTestResult(null)
+    try {
+      const res = await fetch('/api/admin/outreach/ivr-test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone, script_filename: ivrScriptFile }),
+      })
+      const d = await res.json()
+      if (!res.ok) { setTestResult(`Error: ${d.error}`); return }
+      setTestResult(`Calling ${d.to} — SID: ${d.call_sid}`)
+    } catch (e: any) {
+      setTestResult(`Error: ${e.message}`)
+    } finally {
+      setTestCalling(false)
+    }
+  }
 
   // Convert prospects to leads
   const convertToLead = async () => {
@@ -808,6 +1087,24 @@ Calling from (214) 491-5254 via Retell AI.`)) return
     }
   }
 
+  const launchCityIvr = async (city: string, callable: number) => {
+    if (!confirm(`Launch IVR for all ${callable} callable prospects in ${city.split('(')[0].trim()}?\n\nScript: ${ivrScriptFile}`)) return
+    setCityLaunching(city)
+    setCityResult(null)
+    try {
+      const res = await fetch('/api/admin/outreach/ivr-campaign', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ city, script_filename: ivrScriptFile }),
+      })
+      const d = await res.json()
+      setCityResult({ city, dispatched: d.dispatched ?? 0 })
+      fetch('/api/admin/prospects/segments').then(r => r.json()).then(d => { if (d.segments) setSegments(d.segments) }).catch(() => {})
+    } finally {
+      setCityLaunching(null)
+    }
+  }
+
   const emailCount = prospects.filter(p => p.email).length
   const phoneCount = prospects.filter(p => p.phone).length
 
@@ -838,6 +1135,64 @@ Calling from (214) 491-5254 via Retell AI.`)) return
             </button>
           </div>
         </div>
+
+        {/* Zone Filter Banner */}
+        {zoneFilter && (
+          <div className="flex items-center justify-between bg-blue-900/30 border border-blue-500/40 rounded-lg px-4 py-3 mb-4">
+            <div className="flex items-center gap-3">
+              <MapPin className="w-4 h-4 text-blue-400 shrink-0" />
+              <div>
+                <span className="text-sm font-semibold text-white">{zoneFilter.label}</span>
+                <span className="text-xs text-gray-400 ml-2">
+                  {zoneFilter.radius_miles} mi radius · {zoneFilter.storm_date}
+                </span>
+              </div>
+            </div>
+            <button
+              onClick={() => { setZoneFilter(null); fetchProspects(1) }}
+              className="text-gray-400 hover:text-white p-1 transition-colors"
+              title="Clear zone filter"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
+        {/* City Segments Panel */}
+        {segments.length > 0 && (
+          <div className="mb-5 bg-gray-900 border border-gray-800 rounded-xl p-4">
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-xs font-black text-gray-400 uppercase tracking-widest">City Campaign Segments</p>
+              <p className="text-xs text-gray-600">Click IVR to launch the full city — no page limit</p>
+            </div>
+            {cityResult && (
+              <div className="mb-3 text-xs text-green-400 bg-green-900/20 border border-green-800 rounded px-3 py-2">
+                IVR launched for {cityResult.city.split('(')[0].trim()} — {cityResult.dispatched} calls dispatched
+              </div>
+            )}
+            <div className="flex flex-wrap gap-2">
+              {segments.map(seg => {
+                const label = seg.city.split('(')[0].trim()
+                const isLaunching = cityLaunching === seg.city
+                return (
+                  <div key={seg.city} className="flex items-center gap-2 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2">
+                    <div>
+                      <p className="text-xs font-bold text-white">{label}</p>
+                      <p className="text-[10px] text-gray-500">{seg.callable} callable</p>
+                    </div>
+                    <button
+                      onClick={() => launchCityIvr(seg.city, seg.callable)}
+                      disabled={!!cityLaunching}
+                      className="ml-1 px-2 py-1 bg-green-700 hover:bg-green-600 text-white text-[10px] font-bold rounded disabled:opacity-40 transition-colors"
+                    >
+                      {isLaunching ? '...' : 'IVR'}
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Filter Bar */}
         <div className="bg-gray-900 border border-gray-700 rounded-lg px-5 py-4 mb-4">
@@ -872,7 +1227,7 @@ Calling from (214) 491-5254 via Retell AI.`)) return
                 className="w-full text-sm px-3 py-2.5 bg-gray-800 border border-gray-600 rounded text-white focus:outline-none focus:ring-2 focus:ring-yellow-400"
               >
                 <option value="">All Cities</option>
-                {DFW_CITIES.map(c => <option key={c} value={c}>{c}</option>)}
+                {filterCities.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
             </div>
 
@@ -901,16 +1256,16 @@ Calling from (214) 491-5254 via Retell AI.`)) return
               </select>
             </div>
 
-            {/* Neighborhood */}
-            <div className="w-44">
-              <label className="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-2">Neighborhood</label>
+            {/* Campaign / Neighborhood */}
+            <div className="w-52">
+              <label className="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-2">Campaign</label>
               <select
                 value={neighborhood}
                 onChange={e => { setNeighborhood(e.target.value); setPage(1) }}
                 className="w-full text-sm px-3 py-2.5 bg-gray-800 border border-gray-600 rounded text-white focus:outline-none focus:ring-2 focus:ring-yellow-400"
               >
-                <option value="">All</option>
-                {NEIGHBORHOODS.map(n => <option key={n} value={n}>{n}</option>)}
+                <option value="">All Campaigns</option>
+                {filterNeighborhoods.map(n => <option key={n} value={n}>{n}</option>)}
               </select>
             </div>
 
@@ -923,7 +1278,31 @@ Calling from (214) 491-5254 via Retell AI.`)) return
                 className="w-full text-sm px-3 py-2.5 bg-gray-800 border border-gray-600 rounded text-white focus:outline-none focus:ring-2 focus:ring-yellow-400"
               >
                 <option value="">All Sources</option>
-                {SOURCES.map(s => <option key={s} value={s}>{s}</option>)}
+                {filterSources.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+
+            {/* Storm Date */}
+            <div className="w-36">
+              <label className="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-2">Storm Date</label>
+              <input
+                type="date"
+                value={stormDate}
+                onChange={e => { setStormDate(e.target.value); setPage(1) }}
+                className="w-full text-sm px-3 py-2.5 bg-gray-800 border border-gray-600 rounded text-white focus:outline-none focus:ring-2 focus:ring-yellow-400"
+              />
+            </div>
+
+            {/* Per Page */}
+            <div className="w-24">
+              <label className="block text-xs font-bold text-gray-500 uppercase tracking-widest mb-2">Per Page</label>
+              <select value={pageSize} onChange={e => { setPageSize(Number(e.target.value)); setPage(1) }}
+                className="w-full text-sm px-3 py-2.5 bg-gray-800 border border-gray-600 rounded text-white focus:outline-none focus:ring-2 focus:ring-yellow-400"
+              >
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+                <option value={250}>250</option>
+                <option value={500}>500</option>
               </select>
             </div>
 
@@ -942,10 +1321,19 @@ Calling from (214) 491-5254 via Retell AI.`)) return
                 <input
                   type="checkbox"
                   checked={hasPhone}
-                  onChange={e => { setHasPhone(e.target.checked); setPage(1) }}
+                  onChange={e => { setHasPhone(e.target.checked); if (e.target.checked) setNoPhone(false); setPage(1) }}
                   className="w-4 h-4 rounded accent-yellow-400"
                 />
                 <span className="text-xs font-bold text-gray-400 uppercase tracking-wide">Has Phone</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={noPhone}
+                  onChange={e => { setNoPhone(e.target.checked); if (e.target.checked) setHasPhone(false); setPage(1) }}
+                  className="w-4 h-4 rounded accent-orange-400"
+                />
+                <span className="text-xs font-bold text-orange-400 uppercase tracking-wide">Unenriched</span>
               </label>
             </div>
           </div>
@@ -988,6 +1376,69 @@ Calling from (214) 491-5254 via Retell AI.`)) return
           </div>
         </div>
 
+        {/* ── Multi-Channel Campaign Bar ────────────────────────────────── */}
+        <div className="bg-gradient-to-r from-red-950 to-orange-950 border border-red-700 rounded-lg px-5 py-4 mb-4 ring-1 ring-red-800/50">
+          <div className="flex items-center gap-3 mb-3">
+            <Zap className="w-4 h-4 text-red-400 shrink-0" />
+            <span className="text-xs font-black text-red-200 uppercase tracking-widest">Multi-Channel Campaign</span>
+            <span className="text-xs text-gray-400">IVR call + email simultaneously to the same list</span>
+            <div className="ml-auto flex items-center gap-3 text-xs text-gray-400 shrink-0">
+              <span>📞 <strong className="text-orange-300">{selected.size > 0 ? prospects.filter(p=>selected.has(p.id)&&p.phone).length : phoneCount}</strong> IVR</span>
+              <span>📧 <strong className="text-blue-300">{selected.size > 0 ? prospects.filter(p=>selected.has(p.id)&&p.email).length : emailCount}</strong> Email</span>
+            </div>
+          </div>
+          <div className="flex items-center gap-3 flex-wrap">
+            {/* IVR Script */}
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="text-xs text-orange-400 font-bold uppercase tracking-wide">Script</span>
+              <select
+                value={ivrScriptFile}
+                onChange={e => setIvrScriptFile(e.target.value)}
+                className="text-xs bg-red-900/60 border border-red-700 text-orange-200 rounded px-2 py-1.5 focus:outline-none"
+              >
+                {ivrScripts.map(s => <option key={s.id} value={s.filename}>{s.name}</option>)}
+                {ivrScripts.length === 0 && <option value="script-new.mp3">script-new.mp3</option>}
+              </select>
+            </div>
+            {/* Email Template */}
+            <div className="flex items-center gap-2 flex-1 min-w-0">
+              <span className="text-xs text-blue-400 font-bold uppercase tracking-wide shrink-0">Template</span>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {templates.filter(t => t.category?.includes('residential') || t.category?.includes('storm')).map(t => (
+                  <button key={t.id} onClick={() => setBulkTemplateId(t.id)}
+                    className={`px-2.5 py-1 text-[11px] font-bold rounded transition-colors ${bulkTemplateId === t.id ? 'bg-white text-red-900' : 'bg-red-900/60 border border-red-700 text-red-200 hover:bg-red-800'}`}>
+                    {t.variant?.replace(/Residential: /,'').replace(/Storm Follow-Up /,'') || t.slug}
+                  </button>
+                ))}
+                {templates.filter(t => !t.category?.includes('residential') && !t.category?.includes('storm')).length > 0 && (
+                  <select value={bulkTemplateId} onChange={e => setBulkTemplateId(e.target.value)}
+                    className="text-[11px] bg-red-900/60 border border-red-700 text-red-200 rounded px-2 py-1 focus:outline-none">
+                    <option value="">Other templates…</option>
+                    {templates.filter(t => !t.category?.includes('residential') && !t.category?.includes('storm')).map(t => (
+                      <option key={t.id} value={t.id}>{t.variant || t.slug}</option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            </div>
+            {/* Launch Button */}
+            <button
+              onClick={launchMultiChannel}
+              disabled={multiSending || !bulkTemplateId}
+              className="flex items-center gap-2 px-6 py-2.5 bg-red-600 hover:bg-red-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-black rounded transition-colors shrink-0"
+            >
+              <Zap className="w-4 h-4" />
+              {multiSending ? 'Launching...' : '🚀 Launch Campaign'}
+            </button>
+          </div>
+          {multiResult && (
+            <div className="mt-3 text-sm flex flex-wrap gap-4">
+              <span>📞 IVR: <span className="text-green-300 font-bold">{multiResult.ivr_dispatched} dispatched</span>{multiResult.ivr_skipped > 0 && <span className="text-yellow-400 ml-1">{multiResult.ivr_skipped} skipped</span>}</span>
+              <span>📧 Email: <span className="text-green-300 font-bold">{multiResult.email_sent} sent</span>{multiResult.email_skipped > 0 && <span className="text-yellow-400 ml-1">{multiResult.email_skipped} skipped</span>}</span>
+            </div>
+          )}
+        </div>
+
         {/* Bulk Send Bar */}
         <div className="bg-gradient-to-r from-blue-900 to-blue-800 border border-blue-600 rounded-lg px-5 py-4 mb-4">
           <div className="flex items-center gap-4 flex-wrap">
@@ -1022,7 +1473,7 @@ Calling from (214) 491-5254 via Retell AI.`)) return
             {/* From */}
             <div className="flex items-center gap-2 shrink-0">
               <span className="text-xs font-bold text-blue-300 uppercase tracking-wide">From</span>
-              <span className="px-3 py-1.5 text-xs bg-blue-700 text-blue-200 rounded">info@roofworksoftexas.com</span>
+              <span className="px-3 py-1.5 text-xs bg-blue-700 text-blue-200 rounded">noreply@roofworksoftexas.com</span>
             </div>
 
             {/* Send All button */}
@@ -1063,8 +1514,27 @@ Calling from (214) 491-5254 via Retell AI.`)) return
           </div>
           {skipResult && (
             <div className="mt-3 text-sm text-purple-100">
-              Done — <span className="text-green-300 font-bold">{skipResult.found} phones found</span>
-              {skipResult.already_had_phone > 0 && <span className="text-gray-400 ml-2">{skipResult.already_had_phone} already had phone</span>}
+              {skipResult.error
+                ? <span className="text-red-400 font-bold">⚠ {skipResult.error}</span>
+                : <>Done — <span className="text-green-300 font-bold">{skipResult.found} phones found</span>
+                  {skipResult.already_had_phone > 0 && <span className="text-gray-400 ml-2">{skipResult.already_had_phone} already had phone</span>}</>
+              }
+            </div>
+          )}
+          <div className="mt-3 flex items-center gap-3 flex-wrap">
+            <button
+              onClick={enrichAllFiltered}
+              disabled={enrichingAll || skipTracing}
+              className="flex items-center gap-2 px-4 py-2 bg-purple-400 text-purple-950 text-xs font-black rounded hover:bg-purple-300 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {enrichingAll ? 'Enriching...' : 'Enrich All Filtered (no phone)'}
+            </button>
+            <span className="text-xs text-purple-400">Enriches all pages matching current filters in 200-record chunks</span>
+          </div>
+          {enrichAllResult && (
+            <div className="mt-2 text-sm text-purple-100">
+              Done — <span className="text-green-300 font-bold">{enrichAllResult.found} phones found</span>
+              <span className="text-purple-300 ml-2">from {enrichAllResult.total} records processed</span>
             </div>
           )}
         </div>
@@ -1092,6 +1562,72 @@ Calling from (214) 491-5254 via Retell AI.`)) return
               {voiceResult.errors > 0 && <span className="text-red-300 font-bold ml-2">{voiceResult.errors} errors</span>}
             </div>
           )}
+        </div>
+
+        {/* IVR Robocall Campaign Bar */}
+        <div className="bg-gradient-to-r from-orange-900 to-orange-800 border border-orange-700 rounded-lg px-5 py-4 mb-4">
+          <div className="flex items-center gap-4 flex-wrap">
+            <span className="text-xs font-black text-orange-200 uppercase tracking-widest shrink-0">IVR Robocall</span>
+            <span className="text-xs text-orange-300 shrink-0">~$0.007/call · Press 1=Inspection · Press 2=Estimate · Press 3=Opt Out</span>
+            <div className="flex items-center gap-3 ml-auto shrink-0">
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-orange-300 font-bold shrink-0">Script:</span>
+                <select
+                  value={ivrScriptFile}
+                  onChange={e => setIvrScriptFile(e.target.value)}
+                  className="text-xs px-2 py-1.5 bg-orange-800 border border-orange-600 rounded text-orange-100 focus:outline-none focus:ring-1 focus:ring-orange-400 max-w-[180px]"
+                >
+                  {ivrScripts.map(s => (
+                    <option key={s.id} value={s.filename}>{s.name}</option>
+                  ))}
+                  {ivrScripts.length === 0 && (
+                    <option value="script-new.mp3">script-new.mp3</option>
+                  )}
+                </select>
+                <button
+                  onClick={() => setUploadOpen(true)}
+                  className="text-xs px-2 py-1.5 bg-orange-700 text-orange-200 rounded hover:bg-orange-600 transition-colors font-bold"
+                  title="Upload new script MP3"
+                >
+                  + Upload
+                </button>
+              </div>
+              <button
+                onClick={launchIvrCampaign}
+                disabled={ivrSending}
+                className="flex items-center gap-2 px-5 py-2 bg-white text-orange-900 text-sm font-black rounded hover:bg-orange-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <Phone className="w-4 h-4" />
+                {ivrSending ? 'Launching...' : `Launch IVR (${selected.size > 0 ? selected.size : phoneCount})`}
+              </button>
+            </div>
+          </div>
+          {ivrResult && (
+            <div className="mt-3 text-sm text-orange-100">
+              Done — <span className="text-orange-300">{ivrResult.script || ivrScriptFile}</span>: <span className="text-green-300 font-bold">{ivrResult.dispatched} dispatched</span>
+              {ivrResult.skipped > 0 && <span className="text-yellow-300 font-bold ml-2">{ivrResult.skipped} skipped (no phone / DNC)</span>}
+              {ivrResult.errors > 0 && <span className="text-red-300 font-bold ml-2">{ivrResult.errors} errors</span>}
+            </div>
+          )}
+          <div className="mt-3 flex items-center gap-2 border-t border-orange-800 pt-3">
+            <span className="text-xs text-orange-400 font-bold shrink-0">Test Fire:</span>
+            <input
+              type="tel"
+              value={testPhone}
+              onChange={e => setTestPhone(e.target.value)}
+              onBlur={() => testPhone && localStorage.setItem('ivr_test_phone', testPhone)}
+              placeholder="Your number"
+              className="text-xs px-2 py-1.5 bg-orange-950 border border-orange-700 rounded text-orange-100 w-36 focus:outline-none focus:ring-1 focus:ring-orange-400"
+            />
+            <button
+              onClick={fireTestCall}
+              disabled={testCalling}
+              className="text-xs px-3 py-1.5 bg-orange-600 text-white font-black rounded hover:bg-orange-500 transition-colors disabled:opacity-40"
+            >
+              {testCalling ? 'Calling...' : '📞 Test Call'}
+            </button>
+            {testResult && <span className={`text-xs font-bold ${testResult.startsWith('Error') ? 'text-red-400' : 'text-green-400'}`}>{testResult}</span>}
+          </div>
         </div>
 
         {/* SMS Campaign Bar */}
@@ -1295,7 +1831,7 @@ Calling from (214) 491-5254 via Retell AI.`)) return
                   </th>
                   <th className="w-8 px-3 py-4"></th>
                   <th className="px-5 py-4 text-left text-xs font-bold text-gray-400 uppercase tracking-widest">Homeowner</th>
-                  <th className="px-5 py-4 text-left text-xs font-bold text-gray-400 uppercase tracking-widest">City</th>
+                  <th className="px-5 py-4 text-left text-xs font-bold text-gray-400 uppercase tracking-widest">City / ZIP</th>
                   <th className="px-5 py-4 text-left text-xs font-bold text-gray-400 uppercase tracking-widest">Damage</th>
                   <th className="px-5 py-4 text-left text-xs font-bold text-gray-400 uppercase tracking-widest">Emails</th>
                   <th className="px-5 py-4 text-left text-xs font-bold text-gray-400 uppercase tracking-widest">Contact</th>
@@ -1333,7 +1869,10 @@ Calling from (214) 491-5254 via Retell AI.`)) return
                             <MapPin className="w-3 h-3" />{p.address}
                           </div>
                         </td>
-                        <td className="px-5 py-4 text-gray-300 text-base">{p.city}</td>
+                        <td className="px-5 py-4 text-gray-300 text-base">
+                          <div>{p.city || '—'}</div>
+                          {p.zip && <div className="text-xs text-gray-500 mt-0.5">{p.zip}</div>}
+                        </td>
                         <td className="px-5 py-4 text-gray-300 text-base">{p.damage_type || '—'}</td>
                         <td className="px-5 py-4 text-gray-300 text-sm">{p._count?.outreach_history ?? 0}</td>
                         <td className="px-5 py-4">
@@ -1449,7 +1988,7 @@ Calling from (214) 491-5254 via Retell AI.`)) return
                   onChange={e => setAddForm(f => ({ ...f, city: e.target.value }))}
                   className="w-full text-sm px-3 py-2.5 bg-gray-800 border border-gray-600 rounded text-white focus:outline-none focus:ring-2 focus:ring-yellow-400"
                 >
-                  {DFW_CITIES.map(c => <option key={c} value={c}>{c}</option>)}
+                  {filterCities.map(c => <option key={c} value={c}>{c}</option>)}
                 </select>
               </div>
               <div>
@@ -1471,7 +2010,7 @@ Calling from (214) 491-5254 via Retell AI.`)) return
                   className="w-full text-sm px-3 py-2.5 bg-gray-800 border border-gray-600 rounded text-white focus:outline-none focus:ring-2 focus:ring-yellow-400"
                 >
                   <option value="">Unknown</option>
-                  {SOURCES.map(s => <option key={s} value={s}>{s}</option>)}
+                  {filterSources.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
               </div>
               <div>
@@ -1494,6 +2033,61 @@ Calling from (214) 491-5254 via Retell AI.`)) return
                 {addSaving ? 'Adding...' : 'Add Prospect'}
               </button>
               <button onClick={() => setShowAdd(false)} className="px-5 py-3 bg-gray-700 text-white text-sm font-bold rounded hover:bg-gray-600 transition-colors">
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Upload IVR Script Modal */}
+      {uploadOpen && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+          <div className="bg-gray-900 border border-orange-700 rounded-xl p-6 w-full max-w-md">
+            <div className="flex items-center justify-between mb-5">
+              <h2 className="text-lg font-black text-white">Upload IVR Script</h2>
+              <button onClick={() => { setUploadOpen(false); setUploadName(''); setUploadFile(null) }} className="text-gray-400 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <p className="text-xs text-gray-400 mb-4">Upload an MP3 from ElevenLabs or any source. Once uploaded it appears in the script dropdown — no rebuild needed.</p>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-gray-400 uppercase tracking-wide mb-1.5">Script Name</label>
+                <input
+                  type="text"
+                  value={uploadName}
+                  onChange={e => setUploadName(e.target.value)}
+                  placeholder="e.g. ElevenLabs Jessica — Insurance Angle v2"
+                  className="w-full text-sm px-3 py-2.5 bg-gray-800 border border-gray-600 rounded text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-gray-400 uppercase tracking-wide mb-1.5">MP3 File</label>
+                <input
+                  ref={uploadInputRef}
+                  type="file"
+                  accept=".mp3,audio/mpeg"
+                  onChange={e => setUploadFile(e.target.files?.[0] || null)}
+                  className="hidden"
+                />
+                <button
+                  onClick={() => uploadInputRef.current?.click()}
+                  className="w-full text-sm px-3 py-2.5 bg-gray-800 border border-dashed border-gray-600 rounded text-gray-400 hover:border-orange-500 hover:text-orange-300 transition-colors text-left"
+                >
+                  {uploadFile ? `✓ ${uploadFile.name} (${(uploadFile.size / 1024).toFixed(0)}KB)` : 'Click to select MP3 file...'}
+                </button>
+              </div>
+            </div>
+            <div className="flex gap-3 mt-6">
+              <button
+                onClick={handleScriptUpload}
+                disabled={uploading || !uploadName.trim() || !uploadFile}
+                className="flex-1 px-5 py-3 bg-orange-600 text-white text-sm font-black rounded hover:bg-orange-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {uploading ? 'Uploading...' : 'Upload Script'}
+              </button>
+              <button onClick={() => { setUploadOpen(false); setUploadName(''); setUploadFile(null) }} className="px-5 py-3 bg-gray-700 text-white text-sm font-bold rounded hover:bg-gray-600 transition-colors">
                 Cancel
               </button>
             </div>
@@ -1538,4 +2132,12 @@ Calling from (214) 491-5254 via Retell AI.`)) return
       )}
     </div>
   )
+}
+
+export default function StormProspects() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-gray-950 flex items-center justify-center text-gray-400">Loading...</div>}>
+      <StormProspectsInner />
+    </Suspense>
+  );
 }

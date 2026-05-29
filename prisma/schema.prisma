@@ -88,6 +88,7 @@ model line_item_master {
   sort_order Int                   @default(0)
   active     Boolean               @default(true)
   items      estimate_line_items[]
+  inspection_items inspection_line_items[]
 }
 
 // ─── Estimates ───────────────────────────────────────────────────────────────
@@ -300,6 +301,14 @@ model insurance_claims {
   mortgage_loan_no  String?
   status            ClaimStatus @default(FILED)
   notes             String?
+  lat               Float?
+  lon               Float?
+  hail_size_in      Float?
+  priority_score    Int?              @default(0)
+  home_value        Float?
+  year_built        Int?
+  storm_date        String?
+  parcel_id         Int?
   created_at        DateTime    @default(now())
   updated_at        DateTime    @updatedAt
 }
@@ -347,6 +356,7 @@ model outreach_templates {
   variant          String
   subject          String
   body             String
+  body_text        String?
   is_active        Boolean            @default(true)
   variables        String[]           @default([])
   created_at       DateTime           @default(now())
@@ -365,23 +375,47 @@ model storm_prospects {
   zip               String?
   phone             String?
   email             String?
+  phone2            String?
+  email2            String?
+  email3            String?
+  litigator         Boolean            @default(false)
   damage_type       String             @default("hail")
   source            String             @default("manual")
   status            ProspectStatus     @default(NEW)
   last_contacted_at DateTime?
+  call_attempts     Int               @default(0)
   notes             String?
+  lat               Float?
+  lon               Float?
+  hail_size_in      Float?
+  priority_score    Int?              @default(0)
+  home_value        Float?
+  year_built        Int?
+  storm_date        String?
+  county            String?
+  parcel_id         Int?
+  report_token      String?            @unique
   created_at        DateTime           @default(now())
   updated_at        DateTime           @updatedAt
   outreach_history  outreach_history[]
+  retell_calls      retell_calls[]
+  ivr_calls         ivr_calls[]
+  sms_log           sms_log[]
+  sms_replies       sms_replies[]
 }
 
 enum ProspectStatus {
   NEW
-  CONTACTED
+  VOICEMAIL
+  NO_INTEREST
   NO_RESPONSE
+  HARD_NO
+  CALLBACK
+  CONTACTED
   INTERESTED
   CONVERTED
   DNC
+  PENDING_CONFIRMATION
 }
 
 // ─── Outreach History ────────────────────────────────────────────────────────
@@ -443,6 +477,7 @@ model inspection_reports {
   updated_at      DateTime             @updatedAt
   items           inspection_items[]
   photos          inspection_photos[]
+  line_items      inspection_line_items[]
 }
 
 model inspection_items {
@@ -504,6 +539,8 @@ model ev_reports {
   status       String    @default("pending")  // pending | processing | complete | failed
   measurements Json?     // EvReportMeasurements when complete
   pdf_url      String?
+  prospect_id  String?
+  customer_id  String?
   created_at   DateTime  @default(now())
   updated_at   DateTime  @updatedAt
 }
@@ -595,13 +632,26 @@ model business_directory {
   zip               String?
   phone             String?
   email             String?
+  phone2            String?
+  email2            String?
+  email3            String?
+  litigator         Boolean            @default(false)
   website           String?
   rating            Float?
   review_count      Int       @default(0)
   source            String    @default("dfw_business_db")
   status            String    @default("NEW")
   last_contacted_at DateTime?
+  call_attempts     Int               @default(0)
   notes             String?
+  lat               Float?
+  lon               Float?
+  hail_size_in      Float?
+  priority_score    Int?              @default(0)
+  home_value        Float?
+  year_built        Int?
+  storm_date        String?
+  parcel_id         Int?
   created_at        DateTime  @default(now())
   updated_at        DateTime  @updatedAt
 }
@@ -664,6 +714,14 @@ model expenses {
   recurring_freq    String?         // monthly, quarterly, annual
   is_tax_deductible Boolean         @default(true)
   notes             String?
+  lat               Float?
+  lon               Float?
+  hail_size_in      Float?
+  priority_score    Int?              @default(0)
+  home_value        Float?
+  year_built        Int?
+  storm_date        String?
+  parcel_id         Int?
   created_at        DateTime        @default(now())
   updated_at        DateTime        @updatedAt
 }
@@ -747,4 +805,181 @@ model storm_history {
   has_dfw_torn Boolean  @default(false)
   created_at   DateTime @default(now())
   updated_at   DateTime @updatedAt
+}
+
+// ─── Invoice Reminders (Customer-facing overdue notices) ──────────────────────
+
+model invoice_reminders {
+  id           String   @id @default(cuid())
+  invoice_id   String
+  invoice_type String   // 'system' | 'manual'
+  threshold    Int      // days overdue at time of send: 7, 14, 30
+  sent_at      DateTime @default(now())
+  sent_to      String   // email address used
+
+  @@index([invoice_id, invoice_type])
+}
+
+// ─── Plaid Bank Connection ────────────────────────────────────────────────────
+
+model plaid_items {
+  id               String              @id @default(cuid())
+  item_id          String              @unique
+  access_token     String
+  institution_id   String?
+  institution_name String?
+  accounts         Json                @default("[]")
+  cursor           String?
+  last_synced_at   DateTime?
+  created_at       DateTime            @default(now())
+  updated_at       DateTime            @updatedAt
+  transactions     bank_transactions[]
+}
+
+model bank_transactions {
+  id                   String      @id @default(cuid())
+  plaid_item_id        String
+  item                 plaid_items @relation(fields: [plaid_item_id], references: [id], onDelete: Cascade)
+  plaid_transaction_id String      @unique
+  account_id           String
+  date                 DateTime
+  amount               Float       // positive = money out (we flip Plaid sign)
+  description          String
+  merchant_name        String?
+  category             String?     // our mapped expense category
+  plaid_category       String?     // raw Plaid category string
+  status               String      @default("pending") // pending | categorized | matched | ignored
+  matched_expense_id   String?
+  notes                String?
+  created_at           DateTime    @default(now())
+  updated_at           DateTime    @updatedAt
+}
+
+// ─── Retell AI Call Tracking ─────────────────────────────────────────────────
+
+model retell_calls {
+  id                Int              @id @default(autoincrement())
+  prospect_id       String?
+  prospect          storm_prospects? @relation(fields: [prospect_id], references: [id], onDelete: SetNull)
+  call_id           String           @unique
+  agent_id          String
+  status            String           @default("dispatched")
+  duration_seconds  Int?
+  transcript        String?
+  call_summary      String?
+  disconnect_reason String?
+  created_at        DateTime         @default(now())
+  updated_at        DateTime         @updatedAt
+
+  @@index([prospect_id])
+  @@index([created_at])
+}
+
+// ─── Campaign Costs (ROI Tracker) ────────────────────────────────────────────
+
+model campaign_costs {
+  id              String   @id @default(dbgenerated("gen_random_uuid()::text"))
+  date            DateTime @db.Date
+  category        String
+  description     String?
+  amount_cents    Int
+  quantity        Int      @default(1)
+  unit_cost_cents Int      @default(0)
+  campaign_id     String?
+  auto_tracked    Boolean  @default(false)
+  metadata        Json     @default("{}")
+  created_at      DateTime @default(now())
+
+  @@index([date])
+  @@index([category])
+}
+
+// ─── DNC List (phone-level permanent opt-out) ─────────────────────────────────
+
+model dnc_list {
+  id         String   @id @default(cuid())
+  phone      String   @unique
+  reason     String?
+  source     String   @default("manual")
+  created_at DateTime @default(now())
+}
+
+// ─── Admin Notifications ──────────────────────────────────────────────────────
+
+model admin_notifications {
+  id         String   @id @default(dbgenerated("gen_random_uuid()::text"))
+  type       String
+  title      String
+  message    String
+  data       Json?
+  read       Boolean  @default(false)
+  created_at DateTime @default(now())
+
+  @@index([created_at])
+  @@index([read])
+}
+
+// ─── SMS Log (outbound) ───────────────────────────────────────────────────────
+
+model sms_log {
+  id          Int      @id @default(autoincrement())
+  prospect_id String?
+  prospect    storm_prospects? @relation(fields: [prospect_id], references: [id], onDelete: SetNull)
+  phone       String
+  message     String
+  status      String   @default("sent")
+  twilio_sid  String?
+  created_at  DateTime @default(now())
+
+  @@index([prospect_id])
+}
+
+// ─── SMS Replies (inbound) ────────────────────────────────────────────────────
+
+model sms_replies {
+  id          Int      @id @default(autoincrement())
+  prospect_id String?
+  prospect    storm_prospects? @relation(fields: [prospect_id], references: [id], onDelete: SetNull)
+  from_number String
+  body        String
+  created_at  DateTime @default(now())
+
+  @@index([prospect_id])
+  @@index([from_number])
+}
+
+// ─── IVR Calls (Twilio robocall) ─────────────────────────────────────────────
+
+model ivr_calls {
+  id               String   @id @default(cuid())
+  call_sid         String   @unique
+  prospect_id      String?
+  prospect         storm_prospects? @relation(fields: [prospect_id], references: [id], onDelete: SetNull)
+  from_number      String?
+  to_number        String?
+  status           String   @default("dispatched")
+  duration_seconds Int?
+  digit_pressed    String?
+  created_at       DateTime @default(now())
+  updated_at       DateTime @default(now())
+
+  @@index([prospect_id])
+  @@index([status])
+}
+
+
+model inspection_line_items {
+  id           String              @id @default(cuid())
+  report_id    String
+  report       inspection_reports  @relation(fields: [report_id], references: [id], onDelete: Cascade)
+  line_item_id String
+  master       line_item_master    @relation(fields: [line_item_id], references: [id])
+  label        String
+  category     String
+  unit         String
+  qty          Float               @default(0)
+  xactimate    Float               @default(0)
+  ours         Float               @default(0)
+  created_at   DateTime            @default(now())
+  updated_at   DateTime            @updatedAt
 }

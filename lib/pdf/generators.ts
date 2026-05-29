@@ -8,17 +8,17 @@ export interface PdfOpts {
   contractorSig?: string;
 }
 
-const RED    = '#dc2626';
-const NAVY   = '#1e3a5f';
+const RED    = '#9b1c1c';
+const NAVY   = '#1a2e4a';
 const BLACK  = '#1f2937';
 const GRAY   = '#6b7280';
 const LGRAY  = '#9ca3af';
 const RULE   = '#e2e8f0';
 const STRIPE = '#f8fafc';
 
-const LOGO_PATH = path.join(process.cwd(), 'public', 'images', 'logo.png');
+const LOGO_PATH = path.join(process.cwd(), 'public', 'images', 'main_logo_navy_red.png');
 const LOGO_H    = 66;
-const LOGO_W    = Math.round(LOGO_H * (1376 / 768));
+const LOGO_W    = Math.round(LOGO_H * (4600 / 4495));
 
 function fmt(n: number) {
   return `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -38,7 +38,7 @@ function embedSig(doc: any, sig: string, x: number, y: number) {
 function drawPageOneHeader(doc: any, docDate: string, docRef: string, titleLine1: string, titleLine2: string | null, yRef: { val: number }) {
   doc.rect(0, 0, 700, 90).fill(RED);
   try { doc.image(LOGO_PATH, 8, 12, { height: LOGO_H }); } catch (_) {
-    doc.rect(8, 12, LOGO_H, LOGO_H).fill('#b91c1c');
+    doc.rect(8, 12, LOGO_H, LOGO_H).fill('#7f1d1d');
     doc.font('Helvetica-Bold').fontSize(22).fillColor('#fff').text('RWT', 14, 28);
   }
   const TX = LOGO_W + 18;
@@ -49,7 +49,7 @@ function drawPageOneHeader(doc: any, docDate: string, docRef: string, titleLine1
   const L = 50, R = 562;
   const RX = 420;
   const RW = R - RX + 14;
-  doc.rect(RX, 0, 700 - RX, 90).fill('#b91c1c');
+  doc.rect(RX, 0, 700 - RX, 90).fill('#7f1d1d');
   if (titleLine2) {
     doc.font('Helvetica-Bold').fontSize(11).fillColor('#fff').text(titleLine1, RX + 6, 10, { width: RW, align: 'right' });
     doc.font('Helvetica-Bold').fontSize(11).fillColor('#fff').text(titleLine2, RX + 6, 26, { width: RW, align: 'right' });
@@ -70,17 +70,27 @@ function drawContHeader(doc: any, docRef: string, custName: string, label: strin
   const L = 50, R = 562;
   doc.rect(0, 0, 700, 44).fill(NAVY);
   try { doc.image(LOGO_PATH, 6, 4, { height: 36 }); } catch (_) {}
-  const TX2 = Math.round(36 * (1376 / 768)) + 14;
+  const TX2 = Math.round(36 * (4600 / 4495)) + 14;
   doc.font('Helvetica-Bold').fontSize(10).fillColor('#fff').text('ROOF WORKS OF TEXAS', TX2, 10);
-  doc.font('Helvetica').fontSize(7.5).fillColor('#93c5fd').text(label, TX2, 25);
-  doc.font('Helvetica').fontSize(7.5).fillColor('#93c5fd')
+  doc.font('Helvetica').fontSize(7.5).fillColor('#fca5a5').text(label, TX2, 25);
+  doc.font('Helvetica').fontSize(7.5).fillColor('#fca5a5')
     .text(`${docRef}  ·  ${custName}  ·  Page ${pg}`, R - 200, 18, { width: 214, align: 'right' });
   doc.rect(0, 43, 700, 1).fill(RED);
   yRef.val = 60;
 }
 
+function drawPageBorder(doc: any) {
+  doc.save();
+  doc.moveTo(4, 95).lineTo(4, 788).lineTo(608, 788).lineTo(608, 95)
+    .strokeColor('#1a2e4a').lineWidth(1.5).stroke();
+  doc.moveTo(9, 95).lineTo(9, 783).lineTo(603, 783).lineTo(603, 95)
+    .strokeColor('#9b1c1c').lineWidth(0.75).stroke();
+  doc.restore();
+}
+
 function drawFooter(doc: any, pg: number) {
   const L = 50, R = 562, W = R - L;
+  drawPageBorder(doc);
   doc.rect(L - 4, 716, W + 8, 0.5).fill(RULE);
   doc.font('Helvetica').fontSize(7).fillColor(LGRAY)
     .text(`Roof Works of Texas  ·  (214) 795-3905  ·  info@roofworksoftexas.com  ·  roofworksoftexas.com  ·  Page ${pg}`, L, 722, { width: W, align: 'center' });

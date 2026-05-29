@@ -63,7 +63,7 @@ CACHE_DIR = Path("/tmp/mrms_cache")
 CACHE_DIR.mkdir(exist_ok=True)
 
 # DFW bounding box (generous)
-DFW_BBOX = (-99.5, 31.5, -94.0, 34.5)  # (min_lon, min_lat, max_lon, max_lat)
+DFW_BBOX = (-98.5, 32.0, -95.5, 33.9)  # DFW + Collin/Rockwall/Kaufman/Fannin coverage
 
 # Hail severity thresholds in mm (1 inch = 25.4 mm)
 THRESHOLDS_MM = [
@@ -77,7 +77,7 @@ THRESHOLDS_MM = [
 
 def ct_date(offset_days=0) -> str:
     """Return YYYYMMDD in Central Time."""
-    d = datetime.now(timezone.utc) - timedelta(hours=6) + timedelta(days=offset_days)
+    d = datetime.now(timezone.utc) - timedelta(hours=5) + timedelta(days=offset_days)  # CDT = UTC-5
     return d.strftime("%Y%m%d")
 
 
@@ -140,6 +140,9 @@ def grib2_to_polygons(grib2_bytes: bytes) -> list:
         grbs.close()
 
         data, lats, lons = grb.data()
+
+        # Normalize 0-360 lons to -180-180 (MRMS GRIB2 uses 0-360)
+        lons = np.where(lons > 180, lons - 360.0, lons)
 
         # Clip to DFW bounding box
         min_lon, min_lat, max_lon, max_lat = DFW_BBOX
@@ -245,9 +248,25 @@ def get_swath(date_str: str):
         grib2_bytes = download_grib2(build_ncep_url())
 
     if grib2_bytes is None:
-        # Try Iowa State archive — try a few end-of-day times
-        for hour, minute in [(23, 30), (23, 0), (22, 30), (22, 0)]:
-            url = build_archive_url(date_str, hour, minute)
+        # MESH_Max_1440min at 23:30 UTC on date D covers D-1 18:30 CDT to D 18:30 CDT,
+        # so it captures the CDT *previous* evening's storm — off by one for CDT calendar dates.
+        # The file at 05:30 UTC on D+1 covers D 00:30 CDT to D+1 00:30 CDT — correctly
+        # represents storms that happened during CDT calendar date D.
+        from datetime import datetime as _dt, timedelta as _td
+        try:
+            d_plus_1 = (_dt.strptime(date_str, '%Y%m%d') + _td(days=1)).strftime('%Y%m%d')
+        except Exception:
+            d_plus_1 = None
+
+        candidates = []
+        if d_plus_1:
+            # CDT-aligned: try next-UTC-day early morning first
+            candidates += [(d_plus_1, 5, 30), (d_plus_1, 6, 0), (d_plus_1, 4, 30)]
+        # Legacy fallback (off by one for evening storms but works for morning storms)
+        candidates += [(date_str, 23, 30), (date_str, 23, 0), (date_str, 22, 30), (date_str, 22, 0)]
+
+        for (try_date, hour, minute) in candidates:
+            url = build_archive_url(try_date, hour, minute)
             grib2_bytes = download_grib2(url)
             if grib2_bytes:
                 break
@@ -344,7 +363,7 @@ def get_properties_in_polygon(
                 FROM parcels p
                 LEFT JOIN customers c ON LOWER(TRIM(c.address)) = LOWER(TRIM(p.prop_address))
                 WHERE {where}
-                LIMIT 10000
+                ORDER BY RANDOM() LIMIT 50000
             """, params)
             bbox_rows = cur.fetchall()
         conn.close()
@@ -384,9 +403,11 @@ def get_properties_in_polygon(
             "address": row.get('prop_address'),
             "city": row.get('prop_city'),
             "zip": row.get('prop_zip'),
+            "county": row.get('county'),
             "yearBuilt": row.get('year_built'),
             "sqft": row.get('living_sqft'),
             "roofType": row.get('roof_type'),
+            "propType": row.get('prop_type'),
             "value": float(row['total_value']) if row.get('total_value') else None,
             "lat": float(row['lat']) if row.get('lat') else None,
             "lon": float(row['lon']) if row.get('lon') else None,

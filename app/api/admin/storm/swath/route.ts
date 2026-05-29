@@ -2,13 +2,13 @@
  * Storm Swath API
  * Returns hail swath GeoJSON polygons for a given date.
  * Primary: proxies MRMS Python microservice (accurate NEXRAD-based polygons)
- * Fallback: generates polygons from SWDI radar points using server-side Turf.js
+ * Fallback: generates polygons from SWDI radar points using server-side convex hull
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/admin-auth';
 
 const MRMS_BASE = 'http://127.0.0.1:8001';
-const LON_MIN = -99.5, LAT_MIN = 31.5, LON_MAX = -94.0, LAT_MAX = 34.5;
+const LON_MIN = -98.5, LAT_MIN = 32.0, LON_MAX = -95.5, LAT_MAX = 33.9; // DFW + Collin/Rockwall/Kaufman/Fannin
 
 function ctDateFull(offset = 0): string {
   const d = new Date();
@@ -18,29 +18,46 @@ function ctDateFull(offset = 0): string {
 
 async function fetchSwdiPoints(dateYYYYMMDD: string) {
   try {
-    const url = `https://www.ncei.noaa.gov/swdiws/csv/nx3hail/${dateYYYYMMDD}:${dateYYYYMMDD}?bbox=${LON_MIN},${LAT_MIN},${LON_MAX},${LAT_MAX}&limit=5000`;
+    // Date range is end-exclusive. Evening CST storms cross midnight UTC (e.g. 6pm CST = 00:02Z next day).
+    // Query date:date+2 and filter to <noon UTC of day+1 to capture full CST calendar day.
+    // Actual column order: ZTIME(0), WSR_ID(1), CELL_ID(2), PROB(3), SEVPROB(4), MAXSIZE(5), LAT(6), LON(7)
+    const base = new Date(`${dateYYYYMMDD.slice(0,4)}-${dateYYYYMMDD.slice(4,6)}-${dateYYYYMMDD.slice(6,8)}T17:00:00Z`);
+    const startCutoff = base.toISOString(); // noon CDT on requested date — lower bound
+    const nextD = new Date(base.getTime() + 24 * 60 * 60 * 1000);
+    const endD  = new Date(base.getTime() + 48 * 60 * 60 * 1000);
+    const nextDate = `${nextD.getUTCFullYear()}${String(nextD.getUTCMonth()+1).padStart(2,'0')}${String(nextD.getUTCDate()).padStart(2,'0')}`;
+    const endDate  = `${endD.getUTCFullYear()}${String(endD.getUTCMonth()+1).padStart(2,'0')}${String(endD.getUTCDate()).padStart(2,'0')}`;
+    const cutoff = `${nextDate.slice(0,4)}-${nextDate.slice(4,6)}-${nextDate.slice(6,8)}T17:00:00Z`;
+    const url = `https://www.ncei.noaa.gov/swdiws/csv/nx3hail/${dateYYYYMMDD}:${endDate}?bbox=${LON_MIN},${LAT_MIN},${LON_MAX},${LAT_MAX}&limit=5000`;
+
     const res = await fetch(url, {
       headers: { 'User-Agent': 'RoofWorksAdmin/1.0' },
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(12000),
     });
     if (!res.ok) return [];
     const text = await res.text();
-    return text.split('\n')
-      .filter(l => !l.startsWith('#') && l.trim())
-      .slice(1)
-      .flatMap(line => {
-        const c = line.split(',');
-        if (c.length < 10) return [];
-        const lon = parseFloat(c[1]), lat = parseFloat(c[2]);
-        const prob = parseInt(c[8], 10), maxSize = parseFloat(c[9]);
-        if (isNaN(lat) || isNaN(lon) || isNaN(maxSize) || prob < 30) return [];
-        return [{ lon, lat, maxSize, prob }];
-      });
+
+    const points: { lon: number; lat: number; maxSize: number; prob: number }[] = [];
+    for (const line of text.split('\n')) {
+      if (!line.trim() || line.startsWith('ZTIME') || line.startsWith('summary') || line.startsWith('count') || line.startsWith('error') || line.startsWith('#')) continue;
+      const c = line.split(',');
+      if (c.length < 8) continue;
+      const ztime = c[0]?.trim() ?? '';
+      if (!ztime.match(/^\d{4}-\d{2}-\d{2}T/)) continue;
+      if (ztime < startCutoff) continue;  // exclude prior CDT day bleed-in
+      if (ztime > cutoff) continue;
+      const lat = parseFloat(c[6]);
+      const lon = parseFloat(c[7]);
+      const prob = parseInt(c[3], 10);
+      const maxSize = parseFloat(c[5]);
+      if (isNaN(lat) || isNaN(lon) || isNaN(maxSize) || prob < 30) continue;
+      points.push({ lon, lat, maxSize, prob });
+    }
+    return points;
   } catch { return []; }
 }
 
-// Server-side lightweight polygon building from SWDI points
-// Uses convex hull approach (no Turf dependency on server — pure math)
+// Server-side convex hull — no Turf dependency needed
 function buildConvexHull(points: {lon:number,lat:number}[]): number[][] | null {
   if (points.length < 3) return null;
   const pts = points.map(p => [p.lon, p.lat]).sort((a,b) => a[0]-b[0] || a[1]-b[1]);
@@ -62,11 +79,10 @@ function buildConvexHull(points: {lon:number,lat:number}[]): number[][] | null {
 
   const hull = [...lower.slice(0,-1), ...upper.slice(0,-1)];
   if (hull.length < 3) return null;
-  return [...hull, hull[0]]; // close ring
+  return [...hull, hull[0]];
 }
 
 function bufferHull(ring: number[][], bufferDeg = 0.05): number[][] {
-  // Simple centroid-based expansion
   const cx = ring.reduce((s,p) => s+p[0], 0) / ring.length;
   const cy = ring.reduce((s,p) => s+p[1], 0) / ring.length;
   return ring.map(([lon,lat]) => {
@@ -91,7 +107,7 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const date = searchParams.get('date') || ctDateFull(0);
 
-    // 1. Try MRMS microservice (best accuracy)
+    // 1. Try MRMS microservice (best accuracy — works for recent/live data)
     try {
       const mrmsRes = await fetch(`${MRMS_BASE}/swath/${date}`, {
         signal: AbortSignal.timeout(15000),
@@ -104,7 +120,7 @@ export async function GET(req: NextRequest) {
       }
     } catch { /* microservice not running — fall through to SWDI */ }
 
-    // 2. Fallback: SWDI radar points → convex hull polygons
+    // 2. Fallback: SWDI radar points → convex hull polygons (handles historical dates)
     const swdiPts = await fetchSwdiPoints(date);
     if (swdiPts.length === 0) {
       return NextResponse.json({ type: 'FeatureCollection', features: [], method: 'none', date });

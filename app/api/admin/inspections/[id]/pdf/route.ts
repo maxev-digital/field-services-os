@@ -7,13 +7,13 @@ import PDFDocument from 'pdfkit';
 import { INSPECTION_SECTIONS } from '@/lib/inspection-sections';
 import { drawCoverPage } from '@/lib/pdf-cover';
 
-const LOGO_PATH = path.join(process.cwd(), 'public', 'images', 'logo.png');
+const LOGO_PATH = path.join(process.cwd(), 'public', 'images', 'main_logo_navy_red.png');
 const LOGO_H = 66;
-const LOGO_W = Math.round(LOGO_H * (1376 / 768));
+const LOGO_W = Math.round(LOGO_H * (4600 / 4495));
 
-const RED        = '#dc2626';
-const NAVY       = '#1e3a5f';
-const NAVY_LIGHT = '#e8f0fb';
+const RED        = '#9b1c1c';
+const NAVY       = '#1a2e4a';
+const NAVY_LIGHT = '#eef2f7';
 const BLACK      = '#1f2937';
 const GRAY       = '#6b7280';
 const LGRAY      = '#9ca3af';
@@ -25,7 +25,8 @@ function fmtDate(d: Date | string | null): string {
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
   try {
-    await requireAdmin();
+    const isSample = params.id === process.env.SAMPLE_INSPECTION_ID;
+    if (!isSample) await requireAdmin();
 
     const report = await prisma.inspection_reports.findUnique({
       where: { id: params.id },
@@ -47,6 +48,15 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     const chunks: Buffer[] = [];
     const doc = new PDFDocument({ margin: 50, size: 'LETTER', autoFirstPage: true });
     doc.on('data', (chunk: Buffer) => chunks.push(chunk));
+      doc.on('pageAdded', () => {
+        doc.save();
+        doc.moveTo(4, 95).lineTo(4, 788).lineTo(608, 788).lineTo(608, 95)
+          .strokeColor('#1a2e4a').lineWidth(1.5).stroke();
+        doc.moveTo(9, 95).lineTo(9, 783).lineTo(603, 783).lineTo(603, 95)
+          .strokeColor('#9b1c1c').lineWidth(0.75).stroke();
+        doc.restore();
+      });
+
 
     await new Promise<void>((resolve) => {
       doc.on('end', resolve);
@@ -93,7 +103,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 
         doc.rect(0, 88, 700, 2).fill(NAVY);
 
-        doc.rect(420, 0, 280, 90).fill('#b91c1c');
+        doc.rect(420, 0, 280, 90).fill('#7f1d1d');
         doc.font('Helvetica-Bold').fontSize(11).fillColor('#fff')
           .text('PROPERTY INSPECTION REPORT', 424, 28, { width: R - 424 + 14, align: 'right' });
         doc.font('Helvetica').fontSize(8).fillColor('#fecaca')
@@ -108,7 +118,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 
         try { doc.image(LOGO_PATH, 8, 6, { height: 32 }); } catch (_) {}
 
-        const TX2 = Math.round(32 * (1376 / 768)) + 14;
+        const TX2 = Math.round(32 * (4600 / 4495)) + 14;
         doc.font('Helvetica-Bold').fontSize(10).fillColor('#fff').text('ROOF WORKS OF TEXAS', TX2, 14);
         doc.font('Helvetica').fontSize(7.5).fillColor(NAVY_LIGHT)
           .text('Property Inspection Report', TX2, 28);

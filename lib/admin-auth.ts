@@ -78,3 +78,12 @@ export async function requireAdmin(): Promise<AdminUser> {
   if (!admin) throw new Error('Unauthorized');
   return admin;
 }
+
+export async function requireAdminOrInternal(req?: { headers: { get(name: string): string | null } }): Promise<AdminUser> {
+  // Allow server-to-server calls via x-internal-key header
+  const key = req?.headers?.get('x-internal-key');
+  if (key && key === process.env.ADMIN_SECRET) {
+    return { id: 'system', email: 'system@roofworks.internal', role: 'admin', name: 'System' };
+  }
+  return requireAdmin();
+}

@@ -16,6 +16,8 @@ interface Job {
   completed_date: string | null;
   created_at: string;
   customer: { id: string; name: string; phone: string };
+  is_prospect?: boolean;
+  source?: string | null;
 }
 
 const STATUSES: { value: JobStatus; label: string; color: string; bar: string }[] = [
@@ -157,11 +159,14 @@ export default function JobsPage() {
                 const idx = STATUSES.findIndex(s => s.value === job.status);
                 const nextStatus = STATUSES[idx + 1]?.value;
                 return (
-                  <tr key={job.id} onClick={() => window.location.href = `/admin/jobs/${job.id}`}
-                    className="border-b border-gray-700/50 hover:bg-gray-700/30 transition-colors cursor-pointer">
+                  <tr key={job.id} onClick={() => window.location.href = job.is_prospect ? '/admin/leads' : `/admin/jobs/${job.id}`}
+                    className={`border-b border-gray-700/50 hover:bg-gray-700/30 transition-colors cursor-pointer ${job.is_prospect ? 'border-l-2 border-l-orange-600' : ''}`}>
                     <td className="px-4 py-3">
-                      <div className="font-medium text-white">{job.customer.name}</div>
-                      <div className="text-gray-400 text-xs flex items-center gap-1">
+                      <div className="flex items-center gap-2">
+                        <div className="font-medium text-white">{job.customer.name}</div>
+                        {job.is_prospect && <span className="px-1.5 py-0.5 text-[9px] font-bold uppercase rounded bg-orange-900/60 text-orange-400 border border-orange-700/50 leading-none">Storm</span>}
+                      </div>
+                      <div className="text-gray-400 text-xs flex items-center gap-1 mt-0.5">
                         <Phone className="w-3 h-3" />{job.customer.phone}
                       </div>
                     </td>
@@ -188,12 +193,17 @@ export default function JobsPage() {
                     </td>
                     <td className="px-4 py-3 text-gray-400 text-xs">{fmtDate(job.created_at)}</td>
                     <td className="px-4 py-3">
-                      {nextStatus && (
+                      {nextStatus && !job.is_prospect && (
                         <button onClick={e => { e.stopPropagation(); updateStatus(job.id, nextStatus as JobStatus); }}
                           className="flex items-center gap-1 px-2 py-1 bg-gray-700 hover:bg-red-700 text-gray-300 hover:text-white rounded text-xs transition-colors">
                           <ChevronRight className="w-3 h-3" />
                           {STATUS_MAP[nextStatus as JobStatus]?.label}
                         </button>
+                      )}
+                      {job.is_prospect && (
+                        <a href="/admin/leads" className="flex items-center gap-1 px-2 py-1 bg-orange-900/40 hover:bg-orange-800/50 text-orange-400 rounded text-xs transition-colors">
+                          <ChevronRight className="w-3 h-3" /> Work Lead
+                        </a>
                       )}
                     </td>
                   </tr>
@@ -215,10 +225,13 @@ export default function JobsPage() {
                 </div>
                 <div className="bg-gray-800 border border-gray-700 rounded-b-lg min-h-32 p-2 space-y-2">
                   {cols.map(job => (
-                    <div key={job.id} onClick={() => window.location.href = `/admin/jobs/${job.id}`}
-                      className="bg-gray-750 border border-gray-700 rounded-lg p-3 hover:border-gray-500 transition-colors cursor-pointer"
-                      style={{ backgroundColor: 'rgba(55,65,81,0.5)' }}>
-                      <div className="font-medium text-white text-sm truncate">{job.customer.name}</div>
+                    <div key={job.id} onClick={() => window.location.href = job.is_prospect ? '/admin/leads' : `/admin/jobs/${job.id}`}
+                      className={`border rounded-lg p-3 hover:border-gray-500 transition-colors cursor-pointer ${job.is_prospect ? 'border-orange-700/50 bg-orange-950/20' : 'border-gray-700'}`}
+                      style={job.is_prospect ? undefined : { backgroundColor: 'rgba(55,65,81,0.5)' }}>
+                      <div className="flex items-center gap-1.5 mb-0.5">
+                        <div className="font-medium text-white text-sm truncate">{job.customer.name}</div>
+                        {job.is_prospect && <span className="flex-shrink-0 px-1 py-0.5 text-[8px] font-bold uppercase rounded bg-orange-900/60 text-orange-400 border border-orange-700/50 leading-none">Storm</span>}
+                      </div>
                       <div className="text-gray-400 text-xs truncate mt-0.5">{job.address}</div>
                       {job.insurer && <div className="text-gray-500 text-xs mt-1">{job.insurer}</div>}
                       {job.scheduled_date && (

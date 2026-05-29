@@ -1,10 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/admin-auth';
 import prisma from '@/lib/prisma';
+import path from 'path';
 // @ts-ignore
 import PDFDocument from 'pdfkit';
 
-const RED   = '#dc2626';
+const LOGO_PATH = path.join(process.cwd(), 'public', 'images', 'main_logo_navy_red.png');
+const LOGO_H    = 66;
+const LOGO_W    = Math.round(LOGO_H * (4600 / 4495)); // ≈ 67
+
+const RED   = '#9b1c1c';
 const DARK  = '#111827';
 const GRAY  = '#6b7280';
 const BLACK = '#1f2937';
@@ -46,6 +51,15 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     const doc = new PDFDocument({ margin: 50, size: 'LETTER' });
 
     doc.on('data', (chunk: Buffer) => chunks.push(chunk));
+      doc.on('pageAdded', () => {
+        doc.save();
+        doc.moveTo(4, 95).lineTo(4, 788).lineTo(608, 788).lineTo(608, 95)
+          .strokeColor('#1a2e4a').lineWidth(1.5).stroke();
+        doc.moveTo(9, 95).lineTo(9, 783).lineTo(603, 783).lineTo(603, 95)
+          .strokeColor('#9b1c1c').lineWidth(0.75).stroke();
+        doc.restore();
+      });
+
 
     await new Promise<void>((resolve) => {
       doc.on('end', resolve);
@@ -55,27 +69,32 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       const W = R - L;
 
       // ── Header bar ─────────────────────────────────────────────────────────
-      doc.rect(L - 50, 0, 700, 90).fill(RED);
+      doc.rect(0, 0, 700, 90).fill(RED);
+      doc.rect(0, 88, 700, 2).fill('#1a2e4a');
 
-      doc.fillColor('#fff')
-        .font('Helvetica-Bold').fontSize(22)
-        .text('ROOF WORKS OF TEXAS', L, 22);
+      // Logo
+      try { doc.image(LOGO_PATH, 8, 12, { height: LOGO_H }); } catch (_) {}
 
-      doc.font('Helvetica').fontSize(9).fillColor('#fecaca')
-        .text('Roofing Contractor · DFW & North Texas', L, 48)
-        .text('(214) 795-3905  ·  info@roofworksoftexas.com  ·  roofworksoftexas.com', L, 60);
+      // Company text right of logo
+      const TX = LOGO_W + 18;
+      doc.fillColor('#fff').font('Helvetica-Bold').fontSize(16)
+        .text('ROOF WORKS OF TEXAS', TX, 20);
+      doc.font('Helvetica').fontSize(8).fillColor('#fecaca')
+        .text('Roofing Contractor · DFW & North Texas', TX, 42)
+        .text('(214) 795-3905  ·  info@roofworksoftexas.com  ·  roofworksoftexas.com', TX, 55);
 
-      // INVOICE label top-right
+      // INVOICE label top-right — darker band
+      const RX = 420;
+      doc.rect(RX, 0, 700 - RX, 90).fill('#7f1d1d');
       doc.font('Helvetica-Bold').fontSize(28).fillColor('#fff')
-        .text('INVOICE', 400, 22, { width: 162, align: 'right' });
+        .text('INVOICE', RX + 4, 22, { width: R - RX + 14, align: 'right' });
 
       doc.font('Helvetica').fontSize(9).fillColor('#fecaca')
-        .text(invoice.invoice_no, 400, 55, { width: 162, align: 'right' });
+        .text(invoice.invoice_no, RX + 4, 55, { width: R - RX + 14, align: 'right' });
 
       // ── Invoice meta ────────────────────────────────────────────────────────
       let y = 110;
 
-      // Two-column: Bill To (left) / Invoice details (right)
       doc.font('Helvetica-Bold').fontSize(9).fillColor(GRAY).text('BILL TO', L, y);
       doc.font('Helvetica-Bold').fontSize(9).fillColor(GRAY).text('INVOICE DETAILS', 370, y);
 
@@ -106,8 +125,8 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 
       y += 70;
 
-      // Property / project info
-      if (est.address || est.insurer || est.claim_no) {
+      // Property info
+      if (est.address) {
         doc.rect(L - 4, y, W + 8, 1).fill('#e5e7eb');
         y += 10;
 
@@ -117,29 +136,22 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
         doc.font('Helvetica-Bold').fontSize(9).fillColor(BLACK).text('Property: ', L, y, { continued: true });
         doc.font('Helvetica').text(est.address || '—');
 
-        if (est.insurer) {
-          y += 13;
-          doc.font('Helvetica-Bold').fontSize(9).fillColor(BLACK).text('Insurer: ', L, y, { continued: true });
-          doc.font('Helvetica').text(est.insurer + (est.claim_no ? `  ·  Claim #${est.claim_no}` : ''));
-        }
-
         y += 10;
         doc.rect(L - 4, y, W + 8, 1).fill('#e5e7eb');
         y += 14;
       }
 
       // ── Line Items ──────────────────────────────────────────────────────────
-      // Table header
-      const COL = { item: L, qty: 330, unit: 380, ins: 420, ours: 490, delta: 562 };
+      // Columns: Item Description | Qty | Unit | Total
+      const COL = { item: L, qty: 360, unit: 420, total: 490 };
+      const COL_W = { qty: 50, unit: 60, total: 72 };
 
       doc.rect(L - 4, y, W + 8, 18).fill('#f3f4f6');
       doc.font('Helvetica-Bold').fontSize(8).fillColor(GRAY);
-      doc.text('ITEM DESCRIPTION',           COL.item,  y + 5);
-      doc.text('QTY',  COL.qty,  y + 5, { width: 45,  align: 'right' });
-      doc.text('UNIT', COL.unit, y + 5, { width: 35,  align: 'right' });
-      doc.text('INS.',  COL.ins,  y + 5, { width: 65,  align: 'right' });
-      doc.text('OURS', COL.ours, y + 5, { width: 65,  align: 'right' });
-      doc.text('DELTA', COL.delta - 65, y + 5, { width: 65, align: 'right' });
+      doc.text('ITEM DESCRIPTION',                    COL.item,  y + 5);
+      doc.text('QTY',   COL.qty,   y + 5, { width: COL_W.qty,   align: 'right' });
+      doc.text('UNIT',  COL.unit,  y + 5, { width: COL_W.unit,  align: 'right' });
+      doc.text('TOTAL', COL.total, y + 5, { width: COL_W.total, align: 'right' });
 
       y += 22;
 
@@ -149,53 +161,31 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
           .text(cat.toUpperCase(), COL.item, y);
         y += 12;
 
-        items.forEach(li => {
-          // Page break check
-          if (y > 680) {
-            doc.addPage();
-            y = 50;
-          }
+        items.forEach((li: any) => {
+          if (y > 680) { doc.addPage(); y = 50; }
 
           doc.font('Helvetica').fontSize(8).fillColor(BLACK)
-            .text(li.label, COL.item, y, { width: 280 });
-          doc.text(li.qty % 1 === 0 ? String(li.qty) : li.qty.toFixed(2),
-            COL.qty,  y, { width: 45,  align: 'right' });
-          doc.text(li.unit,          COL.unit, y, { width: 35,  align: 'right' });
-          doc.fillColor(GRAY)
-            .text(fmt(li.ins_amt),   COL.ins,  y, { width: 65,  align: 'right' });
-          doc.fillColor(BLACK)
-            .text(fmt(li.our_amt),   COL.ours, y, { width: 65,  align: 'right' });
-          doc.fillColor('#16a34a')
-            .text(fmt(li.delta),     COL.delta - 65, y, { width: 65, align: 'right' });
+            .text(li.label, COL.item, y, { width: 300 });
+          doc.text(
+            li.qty % 1 === 0 ? String(li.qty) : li.qty.toFixed(2),
+            COL.qty, y, { width: COL_W.qty, align: 'right' }
+          );
+          doc.text(li.unit,         COL.unit,  y, { width: COL_W.unit,  align: 'right' });
+          doc.text(fmt(li.our_amt), COL.total, y, { width: COL_W.total, align: 'right' });
 
           y += 14;
-
-          // Light divider
           doc.rect(COL.item - 4, y - 2, W + 8, 0.5).fill('#f3f4f6');
         });
 
         y += 4;
       });
 
-      // ── Totals ──────────────────────────────────────────────────────────────
+      // ── Total ──────────────────────────────────────────────────────────────
       y += 8;
       doc.rect(L - 4, y, W + 8, 1).fill('#d1d5db');
-      y += 8;
-
-      const totRow = (label: string, val: string, bold = false, color = BLACK) => {
-        doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(9)
-          .fillColor(GRAY).text(label, 350, y, { width: 130, align: 'right' })
-          .fillColor(color).font(bold ? 'Helvetica-Bold' : 'Helvetica')
-          .text(val, 490, y, { width: 72, align: 'right' });
-        y += 16;
-      };
-
-      totRow('Insurance Estimate', fmt(est.insurance_total));
-      totRow('Roof Works Price',   fmt(est.our_total), true);
-      totRow(`Customer Savings (${est.savings_pct.toFixed(1)}%)`, fmt(est.savings), false, '#16a34a');
+      y += 12;
 
       // Amount Due box
-      y += 4;
       doc.rect(350, y, 212, 30).fill(RED);
       doc.font('Helvetica-Bold').fontSize(10).fillColor('#fff')
         .text('AMOUNT DUE', 356, y + 9)
@@ -218,7 +208,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       // ── Footer ────────────────────────────────────────────────────────────────
       doc.font('Helvetica').fontSize(7).fillColor(GRAY)
         .text(
-          `Roof Works of Texas  ·  (214) 795-3905  ·  info@roofworksoftexas.com  ·  roofworksoftexas.com`,
+          'Roof Works of Texas  ·  (214) 795-3905  ·  info@roofworksoftexas.com  ·  roofworksoftexas.com',
           L, 730, { width: W, align: 'center' }
         );
 

@@ -61,36 +61,70 @@ function parseSpcCsv(text: string, type: 'hail' | 'wind' | 'torn') {
 // Fetch SWDI radar hail data — more complete than SPC observer reports
 async function fetchSwdiHail(dateYYYYMMDD: string): Promise<any[]> {
   try {
-    // Full CONUS bbox — polygons generated client-side for wherever storms actually hit
-    const url = `https://www.ncei.noaa.gov/swdiws/csv/nx3hail/${dateYYYYMMDD}:${dateYYYYMMDD}?bbox=-130,20,-60,55&limit=10000`;
-    const res = await fetch(url, {
-      headers: { 'User-Agent': 'RoofWorksAdmin/1.0' },
-      signal: AbortSignal.timeout(10000),
-    });
-    if (!res.ok) return [];
-    const text = await res.text();
-    const lines = text.split('\n').filter(l => !l.startsWith('#') && l.trim());
-    if (lines.length < 2) return [];
-    // Fields: ZTIME, LON, LAT, WSR_ID, CELL_ID, RANGE, AZIMUTH, SEVPROB, PROB, MAXSIZE
-    return lines.slice(1).flatMap(line => {
-      const c = line.split(',');
-      if (c.length < 10) return [];
-      const lon = parseFloat(c[1]);
-      const lat = parseFloat(c[2]);
-      const prob = parseInt(c[8], 10);
-      const maxSize = parseFloat(c[9]);
-      if (isNaN(lat) || isNaN(lon) || isNaN(maxSize)) return [];
-      if (prob < 30) return [];
-      return [{
-        lon, lat,
-        wsr_id: c[3]?.trim(),
-        cell_id: c[4]?.trim(),
-        sevprob: parseInt(c[7], 10) || 0,
-        prob,
-        maxSize, // inches
-        time: c[0]?.trim(),
-      }];
-    });
+    // Query date + next UTC day: evening CST storms cross midnight UTC (e.g. 6pm CST = 00:02Z next day).
+    // Filter: keep only data before noon UTC of next day — covers the full CST/CDT calendar day.
+    // SWDI date range is end-exclusive: "20260303:20260304" only covers March 3.
+    // To capture evening CST storms that fall in UTC next-day (e.g. 6pm CST = 00:02Z March 4),
+    // query +2 days and filter with cutoff at noon UTC of day+1.
+    const base = new Date(`${dateYYYYMMDD.slice(0,4)}-${dateYYYYMMDD.slice(4,6)}-${dateYYYYMMDD.slice(6,8)}T12:00:00Z`);
+    const nextD  = new Date(base.getTime() + 24 * 60 * 60 * 1000);
+    const endD   = new Date(base.getTime() + 48 * 60 * 60 * 1000);
+    const nextDate = `${nextD.getUTCFullYear()}${String(nextD.getUTCMonth()+1).padStart(2,'0')}${String(nextD.getUTCDate()).padStart(2,'0')}`;
+    const endDate  = `${endD.getUTCFullYear()}${String(endD.getUTCMonth()+1).padStart(2,'0')}${String(endD.getUTCDate()).padStart(2,'0')}`;
+    const cutoff = `${nextDate.slice(0,4)}-${nextDate.slice(4,6)}-${nextDate.slice(6,8)}T12:00:00Z`;
+    const dateRange = `${dateYYYYMMDD}:${endDate}`;
+
+    // SWDI bbox limit is 15°×15°. Tile CONUS into 4 regions.
+    // Actual column order: ZTIME(0), WSR_ID(1), CELL_ID(2), PROB(3), SEVPROB(4), MAXSIZE(5), LAT(6), LON(7)
+    const tiles = [
+      '-111,24,-97,39',  // Texas west / Oklahoma / New Mexico / Kansas (DFW lon ~-97)
+      '-98,24,-83,39',   // Texas east / Louisiana / Arkansas / Southeast (overlap 1° for DFW)
+      '-111,39,-96,50',  // Northern Plains / Mountain West
+      '-96,39,-81,50',   // Great Lakes / Midwest
+    ];
+
+    const seen = new Set<string>();
+    const allPoints: any[] = [];
+
+    await Promise.all(tiles.map(async bbox => {
+      try {
+        const url = `https://www.ncei.noaa.gov/swdiws/csv/nx3hail/${dateRange}?bbox=${bbox}&limit=10000`;
+        const res = await fetch(url, {
+          headers: { 'User-Agent': 'RoofWorksAdmin/1.0' },
+          signal: AbortSignal.timeout(12000),
+        });
+        if (!res.ok) return;
+        const text = await res.text();
+        for (const line of text.split('\n')) {
+          if (!line.trim() || line.startsWith('ZTIME') || line.startsWith('summary') || line.startsWith('count') || line.startsWith('error') || line.startsWith('#')) continue;
+          const c = line.split(',');
+          if (c.length < 8) continue;
+          const ztime = c[0]?.trim() ?? '';
+          if (!ztime.match(/^\d{4}-\d{2}-\d{2}T/)) continue;
+          if (ztime > cutoff) continue;
+          const lat = parseFloat(c[6]);
+          const lon = parseFloat(c[7]);
+          const prob = parseInt(c[3], 10);
+          const maxSize = parseFloat(c[5]);
+          if (isNaN(lat) || isNaN(lon) || isNaN(maxSize)) continue;
+          if (prob < 30) continue;
+          const key = `${c[1]?.trim()}_${c[2]?.trim()}_${ztime}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          allPoints.push({
+            lon, lat,
+            wsr_id: c[1]?.trim(),
+            cell_id: c[2]?.trim(),
+            sevprob: parseInt(c[4], 10) || 0,
+            prob,
+            maxSize,
+            time: ztime,
+          });
+        }
+      } catch { /* tile failed, skip */ }
+    }));
+
+    return allPoints;
   } catch {
     return [];
   }

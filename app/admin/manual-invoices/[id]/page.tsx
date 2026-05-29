@@ -201,6 +201,38 @@ export default function ManualInvoiceDetailPage() {
     if (data.invoice) setInvoice(data.invoice);
   }
 
+  const [payLinkLoading, setPayLinkLoading] = useState(false);
+  const [payLinkUrl,     setPayLinkUrl]     = useState('');
+  const [payLinkCopied,  setPayLinkCopied]  = useState(false);
+
+  async function sendPaymentLink() {
+    setPayLinkLoading(true);
+    try {
+      // manual-invoices use their own endpoint (no Stripe session stored)
+      // so we open a new Stripe checkout session then copy/open the link
+      const res = await fetch(`/api/admin/manual-invoices/${id}/payment-link`, {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to create payment link');
+      setPayLinkUrl(data.url);
+      // Open in new tab automatically
+      window.open(data.url, '_blank');
+    } catch (e: any) {
+      alert('Payment link error: ' + e.message);
+    } finally {
+      setPayLinkLoading(false);
+    }
+  }
+
+  async function copyPayLink() {
+    if (!payLinkUrl) return;
+    await navigator.clipboard.writeText(payLinkUrl);
+    setPayLinkCopied(true);
+    setTimeout(() => setPayLinkCopied(false), 2000);
+  }
+
   async function deleteInvoice() {
     if (!confirm(`Delete invoice ${invoice?.invoice_no}? This cannot be undone.`)) return;
     setDeleting(true);
@@ -295,6 +327,30 @@ export default function ManualInvoiceDetailPage() {
               }}
             >
               Edit
+            </button>
+          )}
+          {invoice.status !== 'PAID' && (
+            <button
+              onClick={sendPaymentLink}
+              disabled={payLinkLoading}
+              style={{
+                background: '#065f46', color: '#6ee7b7', border: 'none',
+                borderRadius: 8, padding: '9px 16px', fontWeight: 600, fontSize: 13, cursor: 'pointer',
+                opacity: payLinkLoading ? 0.6 : 1,
+              }}
+            >
+              {payLinkLoading ? 'Generating...' : 'Stripe Pay Link'}
+            </button>
+          )}
+          {payLinkUrl && (
+            <button
+              onClick={copyPayLink}
+              style={{
+                background: '#1e3a5f', color: '#93c5fd', border: 'none',
+                borderRadius: 8, padding: '9px 16px', fontWeight: 600, fontSize: 13, cursor: 'pointer',
+              }}
+            >
+              {payLinkCopied ? 'Copied!' : 'Copy Link'}
             </button>
           )}
           <button

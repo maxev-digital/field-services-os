@@ -10,6 +10,7 @@ interface Template {
   variant: string
   subject: string
   body: string
+  body_text?: string
   is_active: boolean
   variables: string[]
   created_at: string
@@ -19,15 +20,16 @@ interface Template {
 const CATEGORIES = ['roofing_outreach', 'storm_followup', 'estimate_followup', 'review_request', 'other']
 
 export default function OutreachTemplatesPage() {
-  const [templates, setTemplates] = useState<Template[]>([])
-  const [loading, setLoading] = useState(true)
+  const [templates, setTemplates]   = useState<Template[]>([])
+  const [loading, setLoading]       = useState(true)
   const [activeCategory, setActiveCategory] = useState('all')
-  const [editing, setEditing] = useState<Template | null>(null)
-  const [isNew, setIsNew] = useState(false)
+  const [editing, setEditing]       = useState<Template | null>(null)
+  const [isNew, setIsNew]           = useState(false)
+  const [bodyTab, setBodyTab]       = useState<'html' | 'text'>('html')
   const [previewHtml, setPreviewHtml] = useState('')
   const [showPreview, setShowPreview] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [copied, setCopied] = useState<string | null>(null)
+  const [saving, setSaving]         = useState(false)
+  const [copied, setCopied]         = useState<string | null>(null)
 
   const fetchTemplates = useCallback(async () => {
     setLoading(true)
@@ -46,6 +48,7 @@ export default function OutreachTemplatesPage() {
   const startEdit = (tmpl: Template) => {
     setEditing({ ...tmpl })
     setIsNew(false)
+    setBodyTab('html')
     setPreviewHtml('')
     setShowPreview(false)
   }
@@ -53,10 +56,11 @@ export default function OutreachTemplatesPage() {
   const startNew = () => {
     setEditing({
       id: '', slug: '', category: 'roofing_outreach', variant: 'v1',
-      subject: '', body: '', is_active: true, variables: [],
+      subject: '', body: '', body_text: '', is_active: true, variables: [],
       created_at: '', updated_at: '',
     })
     setIsNew(true)
+    setBodyTab('html')
     setPreviewHtml('')
     setShowPreview(false)
   }
@@ -67,7 +71,7 @@ export default function OutreachTemplatesPage() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        variables: { name: 'John Smith', address: '123 Oak Lane', city: 'Plano', phone: '(214) 555-1234' },
+        variables: { name: 'John Smith', first_name: 'John', address: '123 Oak Lane', city: 'Plano', phone: '(214) 555-1234', rep_name: 'Austin Peterson' },
       }),
     })
     const data = await res.json()
@@ -84,7 +88,8 @@ export default function OutreachTemplatesPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           slug: editing.slug, category: editing.category, variant: editing.variant,
-          subject: editing.subject, emailBody: editing.body, variables: editing.variables,
+          subject: editing.subject, emailBody: editing.body, bodyText: editing.body_text,
+          variables: editing.variables,
         }),
       })
     } else {
@@ -92,7 +97,7 @@ export default function OutreachTemplatesPage() {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          subject: editing.subject, emailBody: editing.body,
+          subject: editing.subject, emailBody: editing.body, bodyText: editing.body_text,
           variant: editing.variant, category: editing.category,
           variables: editing.variables, is_active: editing.is_active,
         }),
@@ -164,6 +169,10 @@ export default function OutreachTemplatesPage() {
                   <div className="flex items-center gap-2 flex-wrap mb-1">
                     <span className="font-mono text-xs bg-gray-100 px-2 py-0.5 rounded text-gray-600">{tmpl.slug}</span>
                     <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded">{tmpl.category.replace(/_/g, ' ')}</span>
+                    {tmpl.body_text
+                      ? <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">HTML + Plain Text</span>
+                      : <span className="text-xs bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded">HTML only</span>
+                    }
                     {!tmpl.is_active && <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded">Inactive</span>}
                   </div>
                   <p className="font-semibold text-gray-900">Subject: {tmpl.subject}</p>
@@ -228,7 +237,7 @@ export default function OutreachTemplatesPage() {
                     onClick={handlePreview}
                     className="flex items-center gap-2 px-3 py-1.5 border border-gray-300 rounded-lg text-sm hover:bg-gray-50"
                   >
-                    <Eye className="h-4 w-4" /> Preview
+                    <Eye className="h-4 w-4" /> Preview HTML
                   </button>
                 )}
                 <button
@@ -268,7 +277,7 @@ export default function OutreachTemplatesPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Variant</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Variant / Display Name</label>
                   <input
                     value={editing.variant}
                     onChange={(e) => setEditing((prev) => prev && ({ ...prev, variant: e.target.value }))}
@@ -293,24 +302,65 @@ export default function OutreachTemplatesPage() {
                 <input
                   value={editing.subject}
                   onChange={(e) => setEditing((prev) => prev && ({ ...prev, subject: e.target.value }))}
-                  placeholder="Your roof at {{address}} may need attention"
+                  placeholder="Possible Storm Damage Alert: {{address}}"
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
                 />
               </div>
 
+              {/* Body editor with HTML / Plain Text tabs */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Email Body (HTML)
-                  <span className="ml-2 text-xs text-gray-400 font-normal">
-                    Variables: name, address, city, phone
+                <div className="flex border-b border-gray-200 mb-0">
+                  <button
+                    onClick={() => setBodyTab('html')}
+                    className={`px-4 py-2 text-sm font-semibold border-b-2 -mb-px transition-colors ${
+                      bodyTab === 'html'
+                        ? 'border-red-600 text-red-600'
+                        : 'border-transparent text-gray-500 hover:text-gray-700'
+                    }`}
+                  >
+                    HTML Version
+                  </button>
+                  <button
+                    onClick={() => setBodyTab('text')}
+                    className={`px-4 py-2 text-sm font-semibold border-b-2 -mb-px transition-colors flex items-center gap-1.5 ${
+                      bodyTab === 'text'
+                        ? 'border-red-600 text-red-600'
+                        : 'border-transparent text-gray-500 hover:text-gray-700'
+                    }`}
+                  >
+                    Plain Text Version
+                    {!editing.body_text && (
+                      <span className="text-[10px] bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded font-normal">missing</span>
+                    )}
+                  </button>
+                  <span className="ml-auto self-center text-xs text-gray-400 pr-1">
+                    Variables: {'{{name}}'} {'{{first_name}}'} {'{{address}}'} {'{{city}}'} {'{{rep_name}}'}
                   </span>
-                </label>
-                <textarea
-                  value={editing.body}
-                  onChange={(e) => setEditing((prev) => prev && ({ ...prev, body: e.target.value }))}
-                  rows={14}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-red-500"
-                />
+                </div>
+
+                {bodyTab === 'html' ? (
+                  <>
+                    <textarea
+                      value={editing.body}
+                      onChange={(e) => setEditing((prev) => prev && ({ ...prev, body: e.target.value }))}
+                      rows={16}
+                      className="w-full border border-gray-300 border-t-0 rounded-b-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-red-500"
+                      placeholder="HTML body — wrapped in branded template automatically on send."
+                    />
+                    <p className="text-xs text-gray-400 mt-1">Wrapped in the branded header/footer automatically when sent.</p>
+                  </>
+                ) : (
+                  <>
+                    <textarea
+                      value={editing.body_text || ''}
+                      onChange={(e) => setEditing((prev) => prev && ({ ...prev, body_text: e.target.value }))}
+                      rows={16}
+                      className="w-full border border-gray-300 border-t-0 rounded-b-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-red-500"
+                      placeholder="Plain text version — no HTML tags. Sent alongside the HTML as a text/plain alternative. Improves deliverability."
+                    />
+                    <p className="text-xs text-gray-400 mt-1">Sent as text/plain alongside the HTML version. Include full signature here.</p>
+                  </>
+                )}
               </div>
 
               <div>
@@ -329,8 +379,8 @@ export default function OutreachTemplatesPage() {
               {showPreview && previewHtml && (
                 <div>
                   <div className="flex items-center justify-between mb-2">
-                    <label className="text-sm font-medium text-gray-700">Email Preview</label>
-                    <button onClick={() => setShowPreview(false)} className="text-xs text-gray-500 hover:text-gray-700">Close preview</button>
+                    <label className="text-sm font-medium text-gray-700">HTML Preview</label>
+                    <button onClick={() => setShowPreview(false)} className="text-xs text-gray-500 hover:text-gray-700">Close</button>
                   </div>
                   <div className="border border-gray-200 rounded-xl overflow-hidden" style={{ height: '500px' }}>
                     <iframe

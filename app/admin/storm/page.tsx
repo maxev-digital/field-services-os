@@ -7,7 +7,7 @@ import type { Feature, FeatureCollection, Polygon, MultiPolygon, Point } from 'g
 import {
   CloudLightning, AlertTriangle, Wind, RefreshCw,
   Copy, Check, MapPin, Layers, Eye, EyeOff, Users, Calendar,
-  CloudRain, Sun, Thermometer, Bell, TrendingUp,
+  CloudRain, Sun, Thermometer, Bell, TrendingUp, Zap, X,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -85,6 +85,55 @@ const DFW_ZOOM = 6.5;
 
 const BASEMAP_STYLES: Record<string, any> = {
   dark: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+  blue: {
+    version: 8,
+    name: 'Blue',
+    glyphs: 'https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf',
+    sources: {
+      omf: { type: 'vector', url: 'https://tiles.openfreemap.org/planet' },
+    },
+    layers: [
+      // Land background — medium blue
+      { id: 'background',      type: 'background', paint: { 'background-color': '#2d5fa0' } },
+      // Ocean / lakes / water bodies — deep navy blue
+      { id: 'water-fill',      type: 'fill',   source: 'omf', 'source-layer': 'water',          paint: { 'fill-color': '#1a3a78' } },
+      // Landcover (forests, grass, etc.) — slightly muted blue
+      { id: 'landcover',       type: 'fill',   source: 'omf', 'source-layer': 'landcover',       paint: { 'fill-color': '#285e96', 'fill-opacity': 0.55 } },
+      // Parks / nature areas — teal-blue
+      { id: 'park',            type: 'fill',   source: 'omf', 'source-layer': 'park',            paint: { 'fill-color': '#225a78', 'fill-opacity': 0.55 } },
+      // Rivers and streams — deep blue lines
+      { id: 'waterway',        type: 'line',   source: 'omf', 'source-layer': 'waterway',        paint: { 'line-color': '#1a3a78', 'line-width': ['interpolate', ['linear'], ['zoom'], 6, 0.8, 10, 2, 14, 3.5] } },
+      // Local / minor roads — faint blue-gray
+      { id: 'road-minor',      type: 'line',   source: 'omf', 'source-layer': 'transportation',
+        filter: ['in', 'class', 'minor', 'service', 'track', 'path'],
+        paint: { 'line-color': '#4a80bc', 'line-width': 0.4, 'line-opacity': 0.5 } },
+      // Secondary / tertiary roads — medium blue
+      { id: 'road-secondary',  type: 'line',   source: 'omf', 'source-layer': 'transportation',
+        filter: ['in', 'class', 'secondary', 'tertiary'],
+        paint: { 'line-color': '#4a78a0', 'line-width': 1.0 } },
+      // Primary roads — lighter blue
+      { id: 'road-primary',    type: 'line',   source: 'omf', 'source-layer': 'transportation',
+        filter: ['==', 'class', 'primary'],
+        paint: { 'line-color': '#5a85b0', 'line-width': 1.4 } },
+      // Highways (motorway + trunk) — RED
+      { id: 'road-highway',    type: 'line',   source: 'omf', 'source-layer': 'transportation',
+        filter: ['in', 'class', 'motorway', 'trunk'],
+        paint: { 'line-color': '#c25050', 'line-width': ['interpolate', ['linear'], ['zoom'], 6, 1.2, 10, 2.5, 14, 4], 'line-opacity': 0.65 } },
+      // Country borders — solid white, medium weight
+      { id: 'boundary-country', type: 'line',  source: 'omf', 'source-layer': 'boundary',
+        filter: ['==', 'admin_level', 2],
+        paint: { 'line-color': '#ffffff', 'line-width': 1.5, 'line-opacity': 0.9 } },
+      // State / province borders — solid white, heavier
+      { id: 'boundary-state',  type: 'line',   source: 'omf', 'source-layer': 'boundary',
+        filter: ['==', 'admin_level', 4],
+        paint: { 'line-color': '#ffffff', 'line-width': 2.5, 'line-opacity': 0.85 } },
+      // City / town labels
+      { id: 'place-labels',    type: 'symbol', source: 'omf', 'source-layer': 'place',
+        filter: ['in', 'class', 'city', 'town'],
+        layout: { 'text-field': '{name:en}', 'text-font': ['Noto Sans Regular'], 'text-size': ['interpolate', ['linear'], ['zoom'], 7, 10, 12, 14], 'text-max-width': 10, 'text-anchor': 'center' },
+        paint: { 'text-color': '#e8f0fe', 'text-halo-color': '#1a3560', 'text-halo-width': 1.5 } },
+    ],
+  },
   streets: 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
   satellite: {
     version: 8,
@@ -102,7 +151,7 @@ const BASEMAP_STYLES: Record<string, any> = {
 
 function fmtDate(d: string) {
   if (!d || d.length !== 6) return d;
-  return new Date(`20${d.slice(0,2)}-${d.slice(2,4)}-${d.slice(4,6)}`)
+  return new Date(`20${d.slice(0,2)}-${d.slice(2,4)}-${d.slice(4,6)}T12:00:00`)
     .toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
 }
 
@@ -157,6 +206,27 @@ function buildHailGrid(swdiPoints: SwdiPoint[]): FeatureCollection {
   return turf.featureCollection(features);
 }
 
+
+function buildHailPolygons(swdiPoints: SwdiPoint[]): FeatureCollection {
+  const features: Feature[] = [];
+  for (const threshold of HAIL_THRESHOLDS) {
+    const pts = swdiPoints.filter(p => p.maxSize >= threshold.min && p.prob >= 30);
+    if (pts.length < 4) continue;
+    const fc = turf.featureCollection(pts.map(p => turf.point([p.lon, p.lat])));
+    let hull: Feature | null = null;
+    for (const maxEdge of [0.12, 0.18, 0.25, 0.35]) {
+      try { const c = turf.concave(fc, { maxEdge, units: 'degrees' as any }); if (c) { hull = c; break; } } catch {}
+    }
+    if (!hull) { try { hull = turf.convex(fc); } catch { continue; } }
+    if (!hull) continue;
+    try {
+      const buffered = turf.buffer(hull, 0.8, { units: 'kilometers' });
+      if (buffered) features.push({ ...buffered, properties: { threshold: threshold.min, label: threshold.label, color: threshold.color, fill: threshold.fill } } as Feature);
+    } catch {}
+  }
+  return turf.featureCollection(features);
+}
+
 function buildEventGeoJSON(events: StormEvent[], type: ReportType): FeatureCollection<Point> {
   return turf.featureCollection(
     events.map(e => turf.point([e.lon, e.lat], {
@@ -189,10 +259,15 @@ export default function StormDashboardPage() {
   const mapRef = useRef<any>(null);
   const [forecastData, setForecastData] = useState<ForecastData | null>(null);
   const [forecastLoading, setForecastLoading] = useState(false);
-  const [basemap, setBasemap] = useState<'dark' | 'satellite' | 'streets'>('dark');
+  const [basemap, setBasemap] = useState<'dark' | 'blue' | 'satellite' | 'streets'>('blue');
   const [showMesh, setShowMesh] = useState(false);
+  const [radarHour, setRadarHour] = useState(21); // 21:00 UTC approx 3-4pm CDT (peak severe weather)
   const [showSwdiGrid, setShowSwdiGrid] = useState(true);
   const forecastFetchedRef = useRef(false);
+  const [showLeadsModal, setShowLeadsModal] = useState(false);
+  const [leadsLoading, setLeadsLoading] = useState(false);
+  const [leadsResult, setLeadsResult] = useState<any>(null);
+  const [leadsOptions, setLeadsOptions] = useState({ minHailSize: 0.75, excludeRentals: true, excludeExisting: true });
 
   const loadForecast = useCallback(async () => {
     if (forecastFetchedRef.current) return;
@@ -217,6 +292,33 @@ export default function StormDashboardPage() {
   useEffect(() => {
     if (activeTab === 'forecast') loadForecast();
   }, [activeTab, loadForecast]);
+
+  const generateLeads = useCallback(async () => {
+    if (!data?.date) return;
+    setLeadsLoading(true);
+    setLeadsResult(null);
+    try {
+      const dateParam = `20${data.date}`;
+      const res = await fetch('/api/admin/storm/generate-leads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          date: dateParam,
+          minHailSize:    leadsOptions.minHailSize,
+          excludeRentals: leadsOptions.excludeRentals,
+          excludeExisting:leadsOptions.excludeExisting,
+          maxProperties:  2000,
+        }),
+      });
+      const result = await res.json();
+      setLeadsResult(result);
+    } catch (e: any) {
+      setLeadsResult({ error: e.message });
+    } finally {
+      setLeadsLoading(false);
+    }
+  }, [data?.date, leadsOptions]);
 
   const load = useCallback(async (t: ReportType, date?: string) => {
     setLoading(true);
@@ -244,13 +346,23 @@ export default function StormDashboardPage() {
     setTimeout(() => setCopied(null), 2000);
   };
 
-  const hailGrid = data?.swdiPoints?.length ? buildHailGrid(data.swdiPoints) : null;
+  const hailGrid     = data?.swdiPoints?.length ? buildHailGrid(data.swdiPoints) : null;
+  const hailPolygons = data?.swdiPoints?.length ? buildHailPolygons(data.swdiPoints) : null;
   const eventPoints  = data?.events?.length ? buildEventGeoJSON(data.events, type) : null;
 
   const dfwHits   = data?.byCounty.filter(c => DFW_COUNTIES.includes(c.county)) ?? [];
   const otherHits = data?.byCounty.filter(c => !DFW_COUNTIES.includes(c.county)) ?? [];
 
-  const radarTileUrl = `https://mesonet.agron.iastate.edu/cgi-bin/wms/nexrad/n0r.cgi?SERVICE=WMS&REQUEST=GetMap&VERSION=1.1.1&LAYERS=nexrad-n0r&STYLES=&FORMAT=image/png&BGCOLOR=0x000000&TRANSPARENT=TRUE&SRS=EPSG:4326&BBOX={bbox-epsg-4326}&WIDTH=256&HEIGHT=256`;
+  // Date-aware WMS URLs: historical uses IEM time-archive endpoints, live uses standard feed
+  const todayStr = (() => { const d = new Date(); d.setHours(d.getHours() - 6); return d.toISOString().slice(0, 10); })();
+  const isHistorical = !!(selectedDate && selectedDate !== todayStr);
+  const radarTimeParam = isHistorical
+    ? `&TIME=${selectedDate}T${String(radarHour).padStart(2, '0')}:00:00Z`
+    : '';
+  const radarTileUrl = isHistorical
+    ? `https://mesonet.agron.iastate.edu/cgi-bin/wms/nexrad/n0r-t.cgi?SERVICE=WMS&REQUEST=GetMap&VERSION=1.1.1&LAYERS=nexrad-n0r-wmst&STYLES=&FORMAT=image/png&BGCOLOR=0x000000&TRANSPARENT=TRUE&SRS=EPSG:4326&BBOX={bbox-epsg-4326}&WIDTH=256&HEIGHT=256${radarTimeParam}`
+    : `https://mesonet.agron.iastate.edu/cgi-bin/wms/nexrad/n0r.cgi?SERVICE=WMS&REQUEST=GetMap&VERSION=1.1.1&LAYERS=nexrad-n0r&STYLES=&FORMAT=image/png&BGCOLOR=0x000000&TRANSPARENT=TRUE&SRS=EPSG:4326&BBOX={bbox-epsg-4326}&WIDTH=256&HEIGHT=256`;
+  const meshTileUrl = `https://mesonet.agron.iastate.edu/cgi-bin/wms/nexrad/mrms.cgi?SERVICE=WMS&REQUEST=GetMap&VERSION=1.1.1&LAYERS=mrms_mesh&STYLES=&FORMAT=image/png&BGCOLOR=0x000000&TRANSPARENT=TRUE&SRS=EPSG:4326&BBOX={bbox-epsg-4326}&WIDTH=256&HEIGHT=256${radarTimeParam}`;
 
   const tabs = [
     { id: 'hail' as ReportType, label: 'Hail',     icon: <AlertTriangle className="w-3.5 h-3.5" />, dot: HAIL_COLOR },
@@ -300,6 +412,12 @@ export default function StormDashboardPage() {
           <button onClick={() => router.push(`/admin/storm/canvass?date=${selectedDate || ''}`)}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-yellow-700 hover:bg-yellow-600 text-white text-xs font-semibold rounded transition-colors">
             <Users className="w-3.5 h-3.5" /> Canvass
+          </button>
+
+          <button onClick={() => { setShowLeadsModal(true); setLeadsResult(null); }}
+            disabled={!data || data.total === 0}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-green-700 hover:bg-green-600 text-white text-xs font-semibold rounded transition-colors disabled:opacity-40">
+            <Zap className="w-3.5 h-3.5" /> Generate Leads
           </button>
 
           {(['map', 'list', 'forecast'] as ActiveTab[]).map(t => (
@@ -355,7 +473,7 @@ export default function StormDashboardPage() {
           )}
           {data.swdiPoints?.length > 0 && (
             <div className="flex items-center gap-2 text-xs whitespace-nowrap">
-              <span className="text-gray-400">Radar detections (DFW):</span>
+              <span className="text-gray-400">Radar detections (US):</span>
               <span className="font-bold text-blue-400">{data.swdiPoints.length}</span>
             </div>
           )}
@@ -405,9 +523,26 @@ export default function StormDashboardPage() {
 
                 {/* MRMS MESH — radar-derived max hail size (Iowa State, current) */}
                 {showMesh && (
-                  <Source type="raster" tiles={[`https://mesonet.agron.iastate.edu/cgi-bin/wms/nexrad/mrms.cgi?SERVICE=WMS&REQUEST=GetMap&VERSION=1.1.1&LAYERS=mrms_mesh&STYLES=&FORMAT=image/png&BGCOLOR=0x000000&TRANSPARENT=TRUE&SRS=EPSG:4326&BBOX={bbox-epsg-4326}&WIDTH=256&HEIGHT=256`]} tileSize={256}>
+                  <Source type="raster" tiles={[meshTileUrl]} tileSize={256}>
                     <Layer id="mesh-layer" type="raster" paint={{ 'raster-opacity': 0.7 }} />
                   </Source>
+                )}
+
+                {/* Hail swath polygons — concave hull of SWDI radar cells per size tier */}
+                {showPolygons && type === 'hail' && hailPolygons && hailPolygons.features.length > 0 && (
+                  <>
+                    {HAIL_THRESHOLDS.map(t => {
+                      const id = `swath-fill-${t.min}`.replace('.', '-');
+                      const filtered: FeatureCollection = { type: 'FeatureCollection', features: hailPolygons.features.filter((f: Feature) => f.properties?.threshold === t.min) };
+                      if (!filtered.features.length) return null;
+                      return (
+                        <Source key={id} id={`src-${id}`} type="geojson" data={filtered}>
+                          <Layer id={id} type="fill" paint={{ 'fill-color': t.fill, 'fill-outline-color': t.color }} />
+                          <Layer id={`${id}-line`} type="line" paint={{ 'line-color': t.color, 'line-width': 2, 'line-opacity': 0.9 }} />
+                        </Source>
+                      );
+                    })}
+                  </>
                 )}
 
                 {/* SWDI radar hail grid — each cell = ~1km actual radar footprint, colored by max hail size */}
@@ -498,18 +633,19 @@ export default function StormDashboardPage() {
                   </div>
                   {/* Basemap selector */}
                   <div className="flex gap-1 mb-2">
-                    {(['dark', 'satellite', 'streets'] as const).map(b => (
+                    {(['blue', 'dark', 'satellite', 'streets'] as const).map(b => (
                       <button key={b} onClick={() => setBasemap(b)}
                         className={`flex-1 text-center text-xs py-0.5 rounded transition-colors border ${basemap === b ? 'bg-blue-700 border-blue-500 text-white font-bold' : 'bg-gray-800 border-gray-600 text-gray-400'}`}>
-                        {b === 'dark' ? '🌑' : b === 'satellite' ? '🛰' : '🗺'}
+                        {b === 'blue' ? '🔵' : b === 'dark' ? '🌑' : b === 'satellite' ? '🛰' : '🗺'}
                       </button>
                     ))}
                   </div>
                   {[
-                    { key: 'radar', label: 'NEXRAD Radar', state: showRadar,    set: setShowRadar },
-                    { key: 'mesh',  label: 'MRMS MESH',    state: showMesh,     set: setShowMesh },
-                    { key: 'grid',  label: 'SWDI Grid',    state: showSwdiGrid, set: setShowSwdiGrid },
-                    { key: 'pts',   label: 'SPC Reports',  state: showPoints,   set: setShowPoints },
+                    { key: 'radar',  label: 'NEXRAD Radar',  state: showRadar,    set: setShowRadar },
+                    { key: 'mesh',   label: 'MRMS MESH',    state: showMesh,     set: setShowMesh },
+                    { key: 'swaths', label: 'Hail Swaths',  state: showPolygons, set: setShowPolygons },
+                    { key: 'grid',   label: 'SWDI Grid',    state: showSwdiGrid, set: setShowSwdiGrid },
+                    { key: 'pts',    label: 'SPC Reports',  state: showPoints,   set: setShowPoints },
                   ].map(l => (
                     <button key={l.key} onClick={() => l.set(!l.state)}
                       className={`flex items-center gap-1.5 w-full text-left text-xs py-0.5 transition-colors ${l.state ? 'text-white' : 'text-gray-500'}`}>
@@ -517,6 +653,23 @@ export default function StormDashboardPage() {
                       {l.label}
                     </button>
                   ))}
+                  {isHistorical && (
+                    <div className="mt-2 pt-2 border-t border-gray-700">
+                      <div className="text-xs text-gray-400 mb-1">Radar time (UTC)</div>
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          type="range" min={0} max={23} step={1} value={radarHour}
+                          onChange={e => setRadarHour(Number(e.target.value))}
+                          className="flex-1 accent-yellow-400"
+                          style={{ height: '4px' }}
+                        />
+                        <span className="text-xs text-yellow-400 font-mono w-10 text-right">
+                          {String(radarHour).padStart(2, '0')}:00Z
+                        </span>
+                      </div>
+                      <div className="text-xs text-gray-600 mt-0.5">DFW peak: 21-23Z</div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Legend */}
@@ -773,7 +926,118 @@ export default function StormDashboardPage() {
         )}
 
         {/* ── Forecast Tab ── */}
-        {activeTab === 'forecast' && (
+        {/* Generate Leads Modal */}
+      {showLeadsModal && (
+        <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4" onClick={() => setShowLeadsModal(false)}>
+          <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-md p-6" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-5">
+              <div className="flex items-center gap-2">
+                <Zap className="w-5 h-5 text-green-400" />
+                <h2 className="text-white font-bold text-lg">Generate Leads</h2>
+              </div>
+              <button onClick={() => setShowLeadsModal(false)} className="text-gray-400 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {!leadsResult ? (
+              <>
+                <p className="text-gray-400 text-sm mb-4">
+                  Find all properties in the <span className="text-yellow-400 font-semibold">{data?.date ? fmtDate(data.date) : ''}</span> hail swath
+                  and create scored prospects in your pipeline.
+                </p>
+
+                <div className="space-y-3 mb-5">
+                  <div>
+                    <label className="text-xs text-gray-400 block mb-1">Minimum Hail Size</label>
+                    <select
+                      value={leadsOptions.minHailSize}
+                      onChange={e => setLeadsOptions(o => ({ ...o, minHailSize: parseFloat(e.target.value) }))}
+                      className="w-full bg-gray-800 border border-gray-700 text-white text-sm rounded px-3 py-1.5"
+                    >
+                      <option value={0.5}>0.5"+ — Any Hail</option>
+                      <option value={0.75}>0.75"+ — Moderate</option>
+                      <option value={1.0}>1.0"+ — Damaging</option>
+                      <option value={1.5}>1.5"+ — Significant</option>
+                      <option value={2.0}>2.0"+ — Major</option>
+                    </select>
+                  </div>
+                  <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+                    <input type="checkbox" checked={leadsOptions.excludeRentals}
+                      onChange={e => setLeadsOptions(o => ({ ...o, excludeRentals: e.target.checked }))}
+                      className="accent-green-500" />
+                    Exclude likely rentals
+                  </label>
+                  <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+                    <input type="checkbox" checked={leadsOptions.excludeExisting}
+                      onChange={e => setLeadsOptions(o => ({ ...o, excludeExisting: e.target.checked }))}
+                      className="accent-green-500" />
+                    Exclude existing customers
+                  </label>
+                </div>
+
+                <button
+                  onClick={generateLeads}
+                  disabled={leadsLoading}
+                  className="w-full py-2.5 bg-green-600 hover:bg-green-500 text-white font-bold rounded-lg transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  {leadsLoading
+                    ? <><RefreshCw className="w-4 h-4 animate-spin" /> Generating…</>
+                    : <><Zap className="w-4 h-4" /> Generate Leads</>}
+                </button>
+              </>
+            ) : leadsResult.error ? (
+              <div className="text-red-400 text-sm">{leadsResult.error}</div>
+            ) : (
+              <>
+                <div className="grid grid-cols-2 gap-3 mb-4">
+                  <div className="bg-gray-800 rounded-lg p-3 text-center">
+                    <div className="text-2xl font-bold text-green-400">{leadsResult.created?.toLocaleString()}</div>
+                    <div className="text-xs text-gray-400 mt-0.5">New Prospects Created</div>
+                  </div>
+                  <div className="bg-gray-800 rounded-lg p-3 text-center">
+                    <div className="text-2xl font-bold text-blue-400">{leadsResult.total_found?.toLocaleString()}</div>
+                    <div className="text-xs text-gray-400 mt-0.5">Properties Found</div>
+                  </div>
+                </div>
+
+                {leadsResult.message && (
+                  <p className="text-yellow-400 text-sm mb-4">{leadsResult.message}</p>
+                )}
+
+                {leadsResult.tiers && Object.keys(leadsResult.tiers).length > 0 && (
+                  <div className="mb-4">
+                    <div className="text-xs text-gray-400 mb-2 font-semibold uppercase tracking-wider">By Severity</div>
+                    {Object.entries(leadsResult.tiers).map(([label, count]: any) => (
+                      <div key={label} className="flex justify-between text-xs py-0.5">
+                        <span className="text-gray-300">{label}</span>
+                        <span className="text-white font-semibold">{count.toLocaleString()}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => router.push('/admin/prospects')}
+                    className="flex-1 py-2 bg-blue-700 hover:bg-blue-600 text-white text-sm font-semibold rounded-lg"
+                  >
+                    View Prospects
+                  </button>
+                  <button
+                    onClick={() => router.push(`/admin/storm/canvass?date=${selectedDate || ''}`)}
+                    className="flex-1 py-2 bg-yellow-700 hover:bg-yellow-600 text-white text-sm font-semibold rounded-lg"
+                  >
+                    Open Canvass Map
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'forecast' && (
           <div className="flex-1 overflow-y-auto p-4 bg-gray-950">
             <div className="max-w-3xl mx-auto space-y-5">
 

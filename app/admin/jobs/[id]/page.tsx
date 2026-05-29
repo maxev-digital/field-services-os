@@ -1,4 +1,5 @@
 'use client';
+import Link from 'next/link';
 
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
@@ -523,6 +524,20 @@ export default function JobDetailPage() {
             )}
           </div>
         )}
+      </div>
+
+      {/* Canvass Nearby */}
+      <div className="bg-gray-800 border border-gray-700 rounded-xl p-5 mt-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest">Neighborhood Canvass</h2>
+            <p className="text-xs text-gray-500 mt-1">Find nearby homes to door-knock after this job</p>
+          </div>
+          <Link href={`/admin/jobs/${job.id}/canvass`}
+            className="flex items-center gap-2 px-4 py-2 bg-orange-700 hover:bg-orange-600 text-white text-sm font-semibold rounded-lg transition-colors">
+            🚪 Canvass Nearby
+          </Link>
+        </div>
       </div>
     </div>
   );

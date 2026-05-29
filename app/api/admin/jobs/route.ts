@@ -25,7 +25,40 @@ export async function GET(req: NextRequest) {
       orderBy: { created_at: 'desc' },
     });
 
-    return NextResponse.json({ jobs });
+    // Include INTERESTED storm prospects as virtual LEAD entries
+    const includeProspects = !status || status === 'ALL' || status === 'LEAD';
+    let prospectLeads: any[] = [];
+    if (includeProspects) {
+      const prospectWhere: any = { status: 'INTERESTED' };
+      if (search) {
+        prospectWhere.OR = [
+          { address: { contains: search, mode: 'insensitive' } },
+          { name:    { contains: search, mode: 'insensitive' } },
+          { phone:   { contains: search, mode: 'insensitive' } },
+        ];
+      }
+      const prospects = await prisma.storm_prospects.findMany({
+        where:   prospectWhere,
+        select:  { id: true, name: true, address: true, city: true, phone: true, source: true, created_at: true },
+        orderBy: { created_at: 'desc' },
+      });
+      prospectLeads = prospects.map(p => ({
+        id:             p.id,
+        address:        [p.address, p.city].filter(Boolean).join(', '),
+        insurer:        null,
+        claim_no:       null,
+        status:         'LEAD',
+        crew_name:      null,
+        scheduled_date: null,
+        completed_date: null,
+        created_at:     p.created_at,
+        customer:       { id: p.id, name: p.name || 'Unknown', phone: p.phone || '' },
+        is_prospect:    true,
+        source:         p.source ?? null,
+      }));
+    }
+
+    return NextResponse.json({ jobs: [...jobs, ...prospectLeads] });
   } catch (error: any) {
     if (error.message === 'Unauthorized') return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     return NextResponse.json({ error: error.message }, { status: 500 });

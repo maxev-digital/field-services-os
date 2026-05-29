@@ -1,14 +1,22 @@
 import path from 'path';
 
-const LOGO_PATH  = path.join(process.cwd(), 'public', 'images', 'logo.png');
+const LOGO_PATH  = path.join(process.cwd(), 'public', 'images', 'main_logo_navy_red.png');
 const COVER_PATH = path.join(process.cwd(), 'public', 'images', 'cover_page.png');
 
-const RED  = '#dc2626';
-const NAVY = '#1e3a5f';
+const RED  = '#9b1c1c';
+const NAVY = '#1a2e4a';
+
+function drawPageBorder(doc: any) {
+  doc.save();
+  doc.rect(4, 4, 604, 784).strokeColor('#1a2e4a').lineWidth(1.5).stroke();
+  doc.rect(9, 9, 594, 774).strokeColor('#9b1c1c').lineWidth(0.75).stroke();
+  doc.restore();
+}
+
 
 // Logo is 1376×768 — at LOGO_H=66, width ≈ 118
 const LOGO_H = 66;
-const LOGO_W = Math.round(LOGO_H * (1376 / 768)); // ≈ 118
+const LOGO_W = Math.round(LOGO_H * (4600 / 4495)); // ≈ 118
 
 /**
  * Draws a branded cover page on the *current* PDFKit page.
@@ -50,7 +58,7 @@ export function drawCoverPage(
   try {
     doc.image(COVER_PATH, 0, IMG_Y, { fit: [PW, IMG_H] });
   } catch (_) {
-    doc.rect(0, IMG_Y, PW, IMG_H).fill('#e8f0fb');
+    doc.rect(0, IMG_Y, PW, IMG_H).fill('#eef2f7');
     doc.font('Helvetica-Bold').fontSize(36).fillColor('#c3d0e8')
       .text('ROOF WORKS\nOF TEXAS', 0, IMG_Y + IMG_H / 2 - 48, { width: PW, align: 'center' });
   }
@@ -76,4 +84,5 @@ export function drawCoverPage(
     doc.font('Helvetica').fontSize(8.5).fillColor('#fecaca')
       .text(address, 30, BY + 34, { width: PW - 60, align: 'right' });
   }
+
 }

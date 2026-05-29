@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import {
   FileText, Briefcase, Users, ShieldCheck, DollarSign,
-  Star, TrendingUp, ArrowUpRight, Plus, ChevronRight, LayoutDashboard,
+  Star, TrendingUp, ArrowUpRight, Plus, ChevronRight, LayoutDashboard, Target, Pencil, Check,
 } from 'lucide-react';
 
 interface DashboardMetrics {
@@ -53,18 +53,45 @@ const QUICK_LINKS = [
 ];
 
 export default function DashboardPage() {
-  const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [metrics, setMetrics]             = useState<DashboardMetrics | null>(null);
+  const [loading, setLoading]             = useState(true);
+  const [monthlyGoal, setMonthlyGoal]     = useState(0);
+  const [editGoal, setEditGoal]           = useState(false);
+  const [goalInput, setGoalInput]         = useState('');
   const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+  const monthName = new Date().toLocaleDateString('en-US', { month: 'long' });
 
   useEffect(() => {
     fetch('/api/admin/dashboard/metrics')
       .then(r => r.json())
       .then(d => { setMetrics(d); setLoading(false); })
       .catch(() => setLoading(false));
+
+    fetch('/api/admin/settings')
+      .then(r => r.json())
+      .then(d => {
+        const g = d.monthlyRevenueGoal || 0;
+        setMonthlyGoal(g);
+        setGoalInput(g.toString());
+      })
+      .catch(() => {});
   }, []);
 
+  async function saveGoal() {
+    const val = parseInt(goalInput.replace(/[^0-9]/g, '')) || 0;
+    setMonthlyGoal(val);
+    setEditGoal(false);
+    await fetch('/api/admin/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ monthlyRevenueGoal: val }),
+    });
+  }
+
   const m = metrics;
+  const revenue = m?.revenueThisMonth ?? 0;
+  const goalPct = monthlyGoal > 0 ? Math.min(100, (revenue / monthlyGoal) * 100) : 0;
+  const goalRemaining = Math.max(0, monthlyGoal - revenue);
 
   const cards: KpiCard[] = [
     { label: 'New Leads',          value: m?.newLeads ?? 0,                                  icon: TrendingUp,  accent: 'bg-blue-500',    iconBg: 'bg-blue-600',    sub: 'This month' },
@@ -74,7 +101,7 @@ export default function DashboardPage() {
     { label: 'Revenue (MTD)',       value: `$${(m?.revenueThisMonth ?? 0).toLocaleString()}`, icon: DollarSign,  accent: 'bg-emerald-500', iconBg: 'bg-emerald-600', sub: 'Jobs invoiced' },
     { label: 'Jobs Complete (MTD)', value: m?.jobsCompleteThisMonth ?? 0,                     icon: Briefcase,   accent: 'bg-teal-500',    iconBg: 'bg-teal-600',    sub: 'This month' },
     { label: 'Reviews Sent',        value: m?.reviewRequestsSent ?? 0,                        icon: Star,        accent: 'bg-pink-500',    iconBg: 'bg-pink-600',    sub: 'All time' },
-    { label: 'Lead \u2192 Job Rate',     value: `${m?.conversionRate ?? 0}%`,                      icon: Users,       accent: 'bg-indigo-500',  iconBg: 'bg-indigo-600',  sub: 'Conversion' },
+    { label: 'Lead → Job Rate',     value: `${m?.conversionRate ?? 0}%`,                      icon: Users,       accent: 'bg-indigo-500',  iconBg: 'bg-indigo-600',  sub: 'Conversion' },
   ];
 
   return (
@@ -88,6 +115,69 @@ export default function DashboardPage() {
           <p className="text-gray-500 text-xs mt-0.5">{today} &middot; Roof Works of Texas</p>
         </div>
       </div>
+
+      {/* Revenue Goal Tracker */}
+      {!loading && (
+        <div className="bg-gray-800 border border-gray-700 rounded-2xl p-5 mb-6">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <Target className="w-4 h-4 text-red-400" />
+              <span className="text-sm font-bold text-white">{monthName} Revenue Goal</span>
+            </div>
+            {editGoal ? (
+              <div className="flex items-center gap-2">
+                <span className="text-gray-400 text-sm">$</span>
+                <input
+                  value={goalInput}
+                  onChange={e => setGoalInput(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && saveGoal()}
+                  className="w-28 bg-gray-700 border border-gray-500 rounded-lg px-2 py-1 text-sm text-white text-right focus:outline-none focus:border-red-500"
+                  autoFocus
+                />
+                <button onClick={saveGoal} className="p-1.5 bg-green-700 hover:bg-green-600 rounded-lg">
+                  <Check className="w-3.5 h-3.5 text-white" />
+                </button>
+              </div>
+            ) : (
+              <button onClick={() => setEditGoal(true)}
+                className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-white transition-colors">
+                <Pencil className="w-3 h-3" />
+                {monthlyGoal > 0 ? `Goal: $${monthlyGoal.toLocaleString()}` : 'Set Goal'}
+              </button>
+            )}
+          </div>
+
+          {monthlyGoal > 0 ? (
+            <>
+              <div className="flex items-end justify-between mb-2">
+                <div>
+                  <span className={`text-3xl font-black ${goalPct >= 100 ? 'text-green-400' : 'text-white'}`}>
+                    ${revenue.toLocaleString()}
+                  </span>
+                  <span className="text-gray-500 text-sm ml-2">/ ${monthlyGoal.toLocaleString()}</span>
+                </div>
+                <span className={`text-lg font-bold ${goalPct >= 100 ? 'text-green-400' : goalPct >= 75 ? 'text-yellow-400' : 'text-gray-300'}`}>
+                  {goalPct.toFixed(0)}%
+                </span>
+              </div>
+              <div className="w-full h-3 bg-gray-700 rounded-full overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all duration-700 ${goalPct >= 100 ? 'bg-green-500' : goalPct >= 75 ? 'bg-yellow-500' : 'bg-red-600'}`}
+                  style={{ width: `${goalPct}%` }}
+                />
+              </div>
+              <div className="flex justify-between mt-2 text-xs text-gray-500">
+                <span>{goalPct >= 100 ? '🎉 Goal reached!' : `$${goalRemaining.toLocaleString()} to go`}</span>
+                <span>{new Date().getDate()} days into {monthName}</span>
+              </div>
+            </>
+          ) : (
+            <div className="text-sm text-gray-500 text-center py-2">
+              Click "Set Goal" to track your monthly revenue target.
+            </div>
+          )}
+        </div>
+      )}
 
       {loading ? (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">

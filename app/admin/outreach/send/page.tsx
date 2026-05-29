@@ -41,10 +41,19 @@ function CampaignSenderInner() {
   const [templates, setTemplates] = useState<Template[]>([])
   const [selectedTemplate, setSelectedTemplate] = useState<Template | null>(null)
   const [mailbox, setMailbox] = useState(1)
+  const mailboxes = [
+    { index: 1, email: 'info@roofworksoftexas.com',    name: 'Roof Works of Texas' },
+    { index: 3, email: 'noreply@roofworksoftexas.com', name: 'Roof Works of Texas' },
+  ]
   const [sending, setSending] = useState(false)
   const [result, setResult] = useState<SendResult | null>(null)
   const [progress, setProgress] = useState(0)
   const [statusFilter, setStatusFilter] = useState('NEW')
+  const [testEmailSending, setTestEmailSending] = useState(false)
+  const [testEmailResult, setTestEmailResult] = useState<{ ok: boolean; message: string } | null>(null)
+
+  const TEST_PROSPECT_ID = 'test-nash-001'
+  const TEST_PROSPECT_LABEL = 'Nash Peterson — gte.apw@gmail.com · 1029 Lake Cypress Ln, Little Elm'
 
   const loadProspects = useCallback(async () => {
     const params = new URLSearchParams({ limit: '200', status: statusFilter })
@@ -67,6 +76,7 @@ function CampaignSenderInner() {
 
   useEffect(() => { loadProspects(); loadTemplates() }, [loadProspects, loadTemplates])
 
+
   const toggleProspect = (id: string) => {
     setSelectedIds((prev) => {
       const next = new Set(prev)
@@ -80,6 +90,35 @@ function CampaignSenderInner() {
       setSelectedIds(new Set())
     } else {
       setSelectedIds(new Set(prospects.map((p) => p.id)))
+    }
+  }
+
+  const handleTestEmail = async () => {
+    if (!selectedTemplate) return
+    setTestEmailSending(true)
+    setTestEmailResult(null)
+    try {
+      const res = await fetch('/api/admin/outreach/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prospect_ids: [TEST_PROSPECT_ID],
+          template_id: selectedTemplate.id,
+          mailbox,
+        }),
+      })
+      const data = await res.json()
+      const sent = data.sent ?? 0
+      const failed = data.failed ?? 0
+      setTestEmailResult(
+        sent > 0
+          ? { ok: true, message: `Test sent to gte.apw@gmail.com from ${mailboxes.find(m => m.index === mailbox)?.email || 'mailbox'}` }
+          : { ok: false, message: data.error || `Failed to send (sent: ${sent}, failed: ${failed})` }
+      )
+    } catch (e: any) {
+      setTestEmailResult({ ok: false, message: e.message || 'Network error' })
+    } finally {
+      setTestEmailSending(false)
     }
   }
 
@@ -252,20 +291,25 @@ function CampaignSenderInner() {
             <Mail className="h-5 w-5 text-gray-500" />
             <span className="font-semibold text-gray-900">Select Sender Mailbox</span>
           </div>
-          <label className="flex items-center gap-3 p-4 border border-gray-200 rounded-xl cursor-pointer hover:border-red-300">
-            <input
-              type="radio"
-              name="mailbox"
-              value={1}
-              checked={mailbox === 1}
-              onChange={() => setMailbox(1)}
-              className="text-red-600 focus:ring-red-500"
-            />
-            <div>
-              <p className="font-medium text-gray-900">info@roofworksoftexas.com</p>
-              <p className="text-sm text-gray-500">Primary mailbox · Hostinger SMTP</p>
-            </div>
-          </label>
+          {mailboxes.map(m => (
+            <label key={m.index} className="flex items-center gap-3 p-4 border border-gray-200 rounded-xl cursor-pointer hover:border-red-300">
+              <input
+                type="radio"
+                name="mailbox"
+                value={m.index}
+                checked={mailbox === m.index}
+                onChange={() => setMailbox(m.index)}
+                className="text-red-600 focus:ring-red-500"
+              />
+              <div>
+                <p className="font-medium text-gray-900">{m.email}</p>
+                <p className="text-sm text-gray-500">{m.name} · Hostinger SMTP</p>
+              </div>
+            </label>
+          ))}
+          {mailboxes.length === 0 && (
+            <p className="text-sm text-gray-400">No mailboxes configured.</p>
+          )}
 
           {/* Summary */}
           <div className="mt-4 p-4 bg-gray-50 rounded-xl text-sm space-y-1">
@@ -273,7 +317,28 @@ function CampaignSenderInner() {
             <p className="text-gray-600"><span className="font-medium">{selectedIds.size}</span> prospects selected</p>
             <p className="text-gray-600">Template: <span className="font-medium">{selectedTemplate?.variant}</span></p>
             <p className="text-gray-600">Subject: <span className="font-medium">{selectedTemplate?.subject}</span></p>
-            <p className="text-gray-600">From: <span className="font-medium">info@roofworksoftexas.com</span></p>
+            <p className="text-gray-600">From: <span className="font-medium">{mailboxes.find(m => m.index === mailbox)?.email || '—'}</span></p>
+          </div>
+
+          {/* Test Email */}
+          <div className="border border-dashed border-gray-300 rounded-xl p-4 space-y-2">
+            <p className="text-sm font-medium text-gray-700">Send test email first</p>
+            <p className="text-xs text-gray-500">{TEST_PROSPECT_LABEL}</p>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handleTestEmail}
+                disabled={testEmailSending || !selectedTemplate}
+                className="flex items-center gap-2 px-4 py-2 bg-gray-800 text-white rounded-lg text-sm font-medium hover:bg-gray-900 disabled:opacity-50"
+              >
+                <Mail className="h-4 w-4" />
+                {testEmailSending ? 'Sending...' : 'Send Test Email'}
+              </button>
+              {testEmailResult && (
+                <span className={`text-sm font-medium ${testEmailResult.ok ? 'text-green-600' : 'text-red-600'}`}>
+                  {testEmailResult.ok ? '✓' : '✗'} {testEmailResult.message}
+                </span>
+              )}
+            </div>
           </div>
 
           <div className="flex justify-between pt-2">
@@ -299,7 +364,7 @@ function CampaignSenderInner() {
           </div>
           <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-800">
             You are about to send <strong>{selectedIds.size}</strong> emails using template{' '}
-            <strong>{selectedTemplate?.variant}</strong> from <strong>info@roofworksoftexas.com</strong>.
+            <strong>{selectedTemplate?.variant}</strong> from <strong>{mailboxes.find(m => m.index === mailbox)?.email || '—'}</strong>.
             This action cannot be undone.
           </div>
 

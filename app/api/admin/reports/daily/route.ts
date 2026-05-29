@@ -46,130 +46,126 @@ function startOfMonthCT(): Date {
   return new Date(Date.UTC(year, month, 1, ctOffsetHours, 0, 0))
 }
 
-// ── Dark-themed report email builder ─────────────────────────────────────────
+// ── Light-themed report email builder ────────────────────────────────────────
 
 function buildDailyEmail(data: any): string {
-  const s = `
-    <style>
-      .rw-table { width:100%; border-collapse:collapse; margin:12px 0 24px; }
-      .rw-table th { background:#1e1e2e; color:#f1f1f1; padding:10px 14px; text-align:left; font-size:13px; border-bottom:2px solid #dc2626; }
-      .rw-table td { padding:9px 14px; font-size:13px; color:#d1d1d1; border-bottom:1px solid #2a2a3e; }
-      .rw-table tr:nth-child(even) td { background:#16162a; }
-      .metric-card { display:inline-block; width:48%; vertical-align:top; background:#1e1e2e; border-radius:8px; padding:16px; margin:6px 1%; }
-      .metric-val { font-size:28px; font-weight:700; color:#dc2626; margin:0; }
-      .metric-label { font-size:12px; color:#9ca3af; margin:4px 0 0; text-transform:uppercase; letter-spacing:0.5px; }
-      .section-title { font-size:16px; font-weight:700; color:#f1f1f1; margin:28px 0 8px; padding-bottom:6px; border-bottom:2px solid #dc2626; }
-      .alert-box { background:#7f1d1d; border:1px solid #dc2626; border-radius:8px; padding:14px 18px; margin:8px 0; }
-      .alert-box p { margin:4px 0; color:#fca5a5; font-size:13px; }
-      .no-data { color:#6b7280; font-style:italic; font-size:13px; }
-    </style>
-  `
-
   let html = `
 <!DOCTYPE html>
 <html><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/></head>
-<body style="margin:0;padding:0;background:#0f0f1a;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
-${s}
-<table width="100%" cellpadding="0" cellspacing="0" style="background:#0f0f1a;">
+<body style="margin:0;padding:0;background:#f9fafb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f9fafb;">
 <tr><td align="center" style="padding:24px 12px;">
 <table width="640" cellpadding="0" cellspacing="0" style="max-width:640px;width:100%;">
 
   <!-- Header -->
-  <tr><td style="background:#dc2626;padding:20px 28px;border-radius:12px 12px 0 0;">
-    <p style="margin:0;font-size:20px;font-weight:700;color:#fff;">Roof Works of Texas</p>
-    <p style="margin:4px 0 0;font-size:13px;color:#fecaca;">Daily Activity Report</p>
+  <tr><td style="background:#dc2626;padding:20px 28px;">
+    <table width="100%" cellpadding="0" cellspacing="0"><tr>
+      <td style="font-size:20px;font-weight:700;color:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Roof Works of Texas</td>
+    </tr><tr>
+      <td style="font-size:13px;color:#fecaca;padding-top:4px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Daily Activity Report</td>
+    </tr></table>
   </td></tr>
 
   <!-- Body -->
-  <tr><td style="background:#12121f;padding:28px;border-radius:0 0 12px 12px;">
+  <tr><td style="background:#ffffff;padding:28px;border:1px solid #e5e7eb;border-top:none;">
 
-    <p style="color:#9ca3af;font-size:14px;margin:0 0 20px;">Good morning! Here's your daily summary for <strong style="color:#f1f1f1;">${data.dateStr}</strong>.</p>
+    <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="color:#6b7280;font-size:14px;padding-bottom:20px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Good morning! Here's your daily summary for <strong style="color:#1f2937;">${data.dateStr}</strong>.</td></tr></table>
 
     <!-- Metric Cards -->
-    <div style="text-align:center;">
-      <div class="metric-card">
-        <p class="metric-val">${data.newLeadsCount}</p>
-        <p class="metric-label">New Leads</p>
-      </div>
-      <div class="metric-card">
-        <p class="metric-val">${fmt$(data.revenueMTD)}</p>
-        <p class="metric-label">Revenue MTD</p>
-      </div>
-    </div>
-    <div style="text-align:center;margin-bottom:12px;">
-      <div class="metric-card">
-        <p class="metric-val">${data.paymentsToday.count}</p>
-        <p class="metric-label">Payments Today (${fmt$(data.paymentsToday.total)})</p>
-      </div>
-      <div class="metric-card">
-        <p class="metric-val">${data.outreach.sentToday}</p>
-        <p class="metric-label">Outreach Emails Sent</p>
-      </div>
-    </div>
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:8px;">
+      <tr>
+        <td width="50%" style="padding:0 4px 8px 0;">
+          <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="background:#f3f4f6;padding:16px;text-align:center;border:1px solid #e5e7eb;">
+            <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="font-size:28px;font-weight:700;color:#dc2626;text-align:center;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">${data.newLeadsCount}</td></tr>
+            <tr><td style="font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;padding-top:4px;text-align:center;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">New Leads</td></tr></table>
+          </td></tr></table>
+        </td>
+        <td width="50%" style="padding:0 0 8px 4px;">
+          <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="background:#f3f4f6;padding:16px;text-align:center;border:1px solid #e5e7eb;">
+            <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="font-size:28px;font-weight:700;color:#dc2626;text-align:center;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">${fmt$(data.revenueMTD)}</td></tr>
+            <tr><td style="font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;padding-top:4px;text-align:center;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Revenue MTD</td></tr></table>
+          </td></tr></table>
+        </td>
+      </tr>
+      <tr>
+        <td width="50%" style="padding:0 4px 8px 0;">
+          <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="background:#f3f4f6;padding:16px;text-align:center;border:1px solid #e5e7eb;">
+            <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="font-size:28px;font-weight:700;color:#dc2626;text-align:center;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">${data.paymentsToday.count}</td></tr>
+            <tr><td style="font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;padding-top:4px;text-align:center;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Payments Today (${fmt$(data.paymentsToday.total)})</td></tr></table>
+          </td></tr></table>
+        </td>
+        <td width="50%" style="padding:0 0 8px 4px;">
+          <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="background:#f3f4f6;padding:16px;text-align:center;border:1px solid #e5e7eb;">
+            <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="font-size:28px;font-weight:700;color:#dc2626;text-align:center;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">${data.outreach.sentToday}</td></tr>
+            <tr><td style="font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;padding-top:4px;text-align:center;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Outreach Emails Sent</td></tr></table>
+          </td></tr></table>
+        </td>
+      </tr>
+    </table>
 
     <!-- New Leads -->
-    <p class="section-title">New Leads Today</p>
+    <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="font-size:16px;font-weight:700;color:#1f2937;padding:28px 0 8px;border-bottom:2px solid #dc2626;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">New Leads Today</td></tr></table>
     ${data.newLeads.length > 0 ? `
-    <table class="rw-table">
-      <tr><th>Name</th><th>Phone</th><th>Address</th></tr>
-      ${data.newLeads.map((c: any) => `<tr><td>${c.name}</td><td>${c.phone || '-'}</td><td>${c.address || '-'}</td></tr>`).join('')}
-    </table>` : '<p class="no-data">No new leads today.</p>'}
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin:12px 0 24px;border-collapse:collapse;">
+      <tr><th style="background:#f9fafb;padding:10px 14px;text-align:left;font-size:13px;color:#374151;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Name</th><th style="background:#f9fafb;padding:10px 14px;text-align:left;font-size:13px;color:#374151;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Phone</th><th style="background:#f9fafb;padding:10px 14px;text-align:left;font-size:13px;color:#374151;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Address</th></tr>
+      ${data.newLeads.map((c: any) => `<tr><td style="padding:9px 14px;font-size:13px;color:#374151;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">${c.name}</td><td style="padding:9px 14px;font-size:13px;color:#374151;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">${c.phone || '-'}</td><td style="padding:9px 14px;font-size:13px;color:#374151;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">${c.address || '-'}</td></tr>`).join('')}
+    </table>` : '<table width="100%" cellpadding="0" cellspacing="0"><tr><td style="color:#6b7280;font-style:italic;font-size:13px;padding:12px 0 24px;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;">No new leads today.</td></tr></table>'}
 
     <!-- Estimates -->
-    <p class="section-title">Estimates</p>
-    <table class="rw-table">
-      <tr><th>Metric</th><th>Value</th></tr>
-      <tr><td>New Estimates Today</td><td>${data.estimates.newToday}</td></tr>
-      <tr><td>New Estimate Value</td><td>${fmt$(data.estimates.newValue)}</td></tr>
-      <tr><td>Awaiting Approval</td><td>${data.estimates.awaitingApproval}</td></tr>
+    <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="font-size:16px;font-weight:700;color:#1f2937;padding:28px 0 8px;border-bottom:2px solid #dc2626;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Estimates</td></tr></table>
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin:12px 0 24px;border-collapse:collapse;">
+      <tr><th style="background:#f9fafb;padding:10px 14px;text-align:left;font-size:13px;color:#374151;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Metric</th><th style="background:#f9fafb;padding:10px 14px;text-align:left;font-size:13px;color:#374151;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Value</th></tr>
+      <tr><td style="padding:9px 14px;font-size:13px;color:#374151;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">New Estimates Today</td><td style="padding:9px 14px;font-size:13px;color:#374151;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">${data.estimates.newToday}</td></tr>
+      <tr><td style="padding:9px 14px;font-size:13px;color:#374151;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">New Estimate Value</td><td style="padding:9px 14px;font-size:13px;color:#374151;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">${fmt$(data.estimates.newValue)}</td></tr>
+      <tr><td style="padding:9px 14px;font-size:13px;color:#374151;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Awaiting Approval</td><td style="padding:9px 14px;font-size:13px;color:#374151;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">${data.estimates.awaitingApproval}</td></tr>
     </table>
 
     <!-- Jobs Status Changes -->
-    <p class="section-title">Jobs Status Changes</p>
+    <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="font-size:16px;font-weight:700;color:#1f2937;padding:28px 0 8px;border-bottom:2px solid #dc2626;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Jobs Status Changes</td></tr></table>
     ${data.jobChanges.length > 0 ? `
-    <table class="rw-table">
-      <tr><th>Address</th><th>Status</th><th>Customer</th></tr>
-      ${data.jobChanges.map((j: any) => `<tr><td>${j.address}</td><td style="color:#dc2626;font-weight:600;">${j.status}</td><td>${j.customerName}</td></tr>`).join('')}
-    </table>` : '<p class="no-data">No status changes today.</p>'}
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin:12px 0 24px;border-collapse:collapse;">
+      <tr><th style="background:#f9fafb;padding:10px 14px;text-align:left;font-size:13px;color:#374151;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Address</th><th style="background:#f9fafb;padding:10px 14px;text-align:left;font-size:13px;color:#374151;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Status</th><th style="background:#f9fafb;padding:10px 14px;text-align:left;font-size:13px;color:#374151;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Customer</th></tr>
+      ${data.jobChanges.map((j: any) => `<tr><td style="padding:9px 14px;font-size:13px;color:#374151;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">${j.address}</td><td style="padding:9px 14px;font-size:13px;color:#dc2626;font-weight:600;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">${j.status}</td><td style="padding:9px 14px;font-size:13px;color:#374151;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">${j.customerName}</td></tr>`).join('')}
+    </table>` : '<table width="100%" cellpadding="0" cellspacing="0"><tr><td style="color:#6b7280;font-style:italic;font-size:13px;padding:12px 0 24px;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;">No status changes today.</td></tr></table>'}
 
     <!-- Payments -->
-    <p class="section-title">Payments Received</p>
+    <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="font-size:16px;font-weight:700;color:#1f2937;padding:28px 0 8px;border-bottom:2px solid #dc2626;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Payments Received</td></tr></table>
     ${data.paymentsList.length > 0 ? `
-    <table class="rw-table">
-      <tr><th>Invoice</th><th>Amount</th><th>Method</th></tr>
-      ${data.paymentsList.map((p: any) => `<tr><td>${p.invoiceNo}</td><td>${fmt$(p.amount)}</td><td>${p.method}</td></tr>`).join('')}
-    </table>` : '<p class="no-data">No payments today.</p>'}
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin:12px 0 24px;border-collapse:collapse;">
+      <tr><th style="background:#f9fafb;padding:10px 14px;text-align:left;font-size:13px;color:#374151;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Invoice</th><th style="background:#f9fafb;padding:10px 14px;text-align:left;font-size:13px;color:#374151;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Amount</th><th style="background:#f9fafb;padding:10px 14px;text-align:left;font-size:13px;color:#374151;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Method</th></tr>
+      ${data.paymentsList.map((p: any) => `<tr><td style="padding:9px 14px;font-size:13px;color:#374151;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">${p.invoiceNo}</td><td style="padding:9px 14px;font-size:13px;color:#374151;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">${fmt$(p.amount)}</td><td style="padding:9px 14px;font-size:13px;color:#374151;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">${p.method}</td></tr>`).join('')}
+    </table>` : '<table width="100%" cellpadding="0" cellspacing="0"><tr><td style="color:#6b7280;font-style:italic;font-size:13px;padding:12px 0 24px;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;">No payments today.</td></tr></table>'}
 
     <!-- Outreach Stats -->
-    <p class="section-title">Outreach Stats</p>
-    <table class="rw-table">
-      <tr><th>Metric</th><th>Value</th></tr>
-      <tr><td>Emails Sent Today</td><td>${data.outreach.sentToday}</td></tr>
-      <tr><td>Prospects Converted (All Time)</td><td>${data.outreach.converted}</td></tr>
+    <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="font-size:16px;font-weight:700;color:#1f2937;padding:28px 0 8px;border-bottom:2px solid #dc2626;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Outreach Stats</td></tr></table>
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin:12px 0 24px;border-collapse:collapse;">
+      <tr><th style="background:#f9fafb;padding:10px 14px;text-align:left;font-size:13px;color:#374151;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Metric</th><th style="background:#f9fafb;padding:10px 14px;text-align:left;font-size:13px;color:#374151;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Value</th></tr>
+      <tr><td style="padding:9px 14px;font-size:13px;color:#374151;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Emails Sent Today</td><td style="padding:9px 14px;font-size:13px;color:#374151;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">${data.outreach.sentToday}</td></tr>
+      <tr><td style="padding:9px 14px;font-size:13px;color:#374151;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Prospects Converted (All Time)</td><td style="padding:9px 14px;font-size:13px;color:#374151;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">${data.outreach.converted}</td></tr>
     </table>
 
     <!-- Upcoming -->
-    <p class="section-title">Upcoming (Next 7 Days)</p>
+    <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="font-size:16px;font-weight:700;color:#1f2937;padding:28px 0 8px;border-bottom:2px solid #dc2626;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Upcoming (Next 7 Days)</td></tr></table>
     ${data.upcoming.scheduledJobs.length > 0 ? `
-    <table class="rw-table">
-      <tr><th>Date</th><th>Address</th><th>Status</th></tr>
-      ${data.upcoming.scheduledJobs.map((j: any) => `<tr><td>${j.date}</td><td>${j.address}</td><td>${j.status}</td></tr>`).join('')}
-    </table>` : '<p class="no-data">No jobs scheduled in the next 7 days.</p>'}
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin:12px 0 24px;border-collapse:collapse;">
+      <tr><th style="background:#f9fafb;padding:10px 14px;text-align:left;font-size:13px;color:#374151;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Date</th><th style="background:#f9fafb;padding:10px 14px;text-align:left;font-size:13px;color:#374151;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Address</th><th style="background:#f9fafb;padding:10px 14px;text-align:left;font-size:13px;color:#374151;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Status</th></tr>
+      ${data.upcoming.scheduledJobs.map((j: any) => `<tr><td style="padding:9px 14px;font-size:13px;color:#374151;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">${j.date}</td><td style="padding:9px 14px;font-size:13px;color:#374151;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">${j.address}</td><td style="padding:9px 14px;font-size:13px;color:#374151;border-bottom:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">${j.status}</td></tr>`).join('')}
+    </table>` : '<table width="100%" cellpadding="0" cellspacing="0"><tr><td style="color:#6b7280;font-style:italic;font-size:13px;padding:12px 0 24px;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;">No jobs scheduled in the next 7 days.</td></tr></table>'}
 
     ${data.upcoming.overdueInvoices > 0 ? `
-    <div class="alert-box">
-      <p><strong>Overdue Invoices:</strong> ${data.upcoming.overdueInvoices} invoice(s) past due</p>
-    </div>` : ''}
+    <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="background:#fef2f2;border:1px solid #fecaca;padding:14px 18px;margin:8px 0;">
+      <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="color:#991b1b;font-size:13px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;"><strong>Overdue Invoices:</strong> ${data.upcoming.overdueInvoices} invoice(s) past due</td></tr></table>
+    </td></tr></table>` : ''}
 
     <!-- Alerts -->
     ${data.alerts.length > 0 ? `
-    <p class="section-title">Alerts</p>
-    ${data.alerts.map((a: string) => `<div class="alert-box"><p>${a}</p></div>`).join('')}
+    <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="font-size:16px;font-weight:700;color:#1f2937;padding:28px 0 8px;border-bottom:2px solid #dc2626;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Alerts</td></tr></table>
+    ${data.alerts.map((a: string) => `<table width="100%" cellpadding="0" cellspacing="0" style="margin:8px 0;"><tr><td style="background:#fef2f2;border:1px solid #fecaca;padding:14px 18px;"><table width="100%" cellpadding="0" cellspacing="0"><tr><td style="color:#991b1b;font-size:13px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">${a}</td></tr></table></td></tr></table>`).join('')}
     ` : ''}
 
-    <p style="color:#6b7280;font-size:11px;margin:32px 0 0;text-align:center;">
+    <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="color:#9ca3af;font-size:11px;padding-top:32px;text-align:center;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
       Automated report from ${brand.name} Admin &middot; ${data.dateStr}
-    </p>
+    </td></tr></table>
 
   </td></tr>
 </table>

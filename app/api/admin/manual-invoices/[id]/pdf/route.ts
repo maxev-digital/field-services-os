@@ -1,16 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
+import fs from 'fs';
+import nodePath from 'path';
 import { requireAdmin } from '@/lib/admin-auth';
 import prisma from '@/lib/prisma';
 import path from 'path';
 // @ts-ignore
 import PDFDocument from 'pdfkit';
 
-const LOGO_PATH = path.join(process.cwd(), 'public', 'images', 'logo.png');
+const LOGO_PATH = path.join(process.cwd(), 'public', 'images', 'main_logo_navy_red.png');
 const LOGO_H    = 66;
-const LOGO_W    = Math.round(LOGO_H * (1376 / 768)); // ≈ 118
+const LOGO_W    = Math.round(LOGO_H * (4600 / 4495)); // ≈ 118
 
-const NAVY = '#1e3a5f';
-const RED  = '#dc2626';
+const NAVY = '#1a2e4a';
+const RED  = '#9b1c1c';
 const GRAY = '#6b7280';
 const BLK  = '#1f2937';
 
@@ -20,6 +22,21 @@ function fmt(n: number) {
 function dFmt(d: Date | string | null) {
   if (!d) return '—';
   return new Date(d).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+}
+
+
+function getPaymentSettings(): { zellePhone: string; cashAppHandle: string; checkPayableTo: string } {
+  try {
+    const file = nodePath.join(process.cwd(), 'data', 'admin-settings.json');
+    const s = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return {
+      zellePhone:    s.zellePhone    || '',
+      cashAppHandle: s.cashAppHandle || '',
+      checkPayableTo: s.checkPayableTo || 'Roof Works of Texas',
+    };
+  } catch {
+    return { zellePhone: '', cashAppHandle: '', checkPayableTo: 'Roof Works of Texas' };
+  }
 }
 
 export async function GET(
@@ -43,6 +60,15 @@ export async function GET(
     const chunks: Buffer[] = [];
     const doc = new PDFDocument({ margin: 50, size: 'LETTER' });
     doc.on('data', (chunk: Buffer) => chunks.push(chunk));
+      doc.on('pageAdded', () => {
+        doc.save();
+        doc.moveTo(4, 95).lineTo(4, 788).lineTo(608, 788).lineTo(608, 95)
+          .strokeColor('#1a2e4a').lineWidth(1.5).stroke();
+        doc.moveTo(9, 95).lineTo(9, 783).lineTo(603, 783).lineTo(603, 95)
+          .strokeColor('#9b1c1c').lineWidth(0.75).stroke();
+        doc.restore();
+      });
+
 
     await new Promise<void>(resolve => {
       doc.on('end', resolve);
@@ -75,13 +101,13 @@ export async function GET(
       doc.rect(RX, 0, 612 - RX, 90).fill(NAVY);
       doc.font('Helvetica-Bold').fontSize(22).fillColor('#ffffff')
         .text('INVOICE', RX + 4, 18, { width: 612 - RX - 8, align: 'right' });
-      doc.font('Helvetica').fontSize(8.5).fillColor('#93c5fd')
+      doc.font('Helvetica').fontSize(8.5).fillColor('#fca5a5')
         .text(invoice.invoice_no, RX + 4, 50, { width: 612 - RX - 8, align: 'right' });
 
       // ── Watermark logo centered on page ─────────────────────────────────
       try {
         const wmH = 220;
-        const wmW = Math.round(wmH * (1376 / 768));
+        const wmW = Math.round(wmH * (4600 / 4495));
         const wmX = (612 - wmW) / 2;
         const wmY = (792 - wmH) / 2;
         doc.save();
@@ -235,7 +261,22 @@ export async function GET(
         y += 6;
       }
 
-      // ── Navy footer strip ────────────────────────────────────────────────
+      // ── How to Pay ──────────────────────────────────────────────────────────
+      const pmtSettings = getPaymentSettings();
+      const pmtMethods: string[] = [];
+      if (pmtSettings.zellePhone)    pmtMethods.push(`Zelle: ${pmtSettings.zellePhone}`);
+      if (pmtSettings.cashAppHandle) pmtMethods.push(`CashApp: ${pmtSettings.cashAppHandle}`);
+      if (pmtSettings.checkPayableTo) pmtMethods.push(`Check payable to: ${pmtSettings.checkPayableTo}`);
+
+      if (pmtMethods.length > 0 && y < 700) {
+        y += 6;
+        doc.font('Helvetica-Bold').fontSize(8).fillColor(NAVY).text('HOW TO PAY', L, y);
+        y += 12;
+        doc.font('Helvetica').fontSize(8).fillColor(BLK).text(pmtMethods.join('  ·  '), L, y, { width: W });
+        y += 14;
+      }
+
+      // ── Navy footer strip ────────────────────────────────────────────────────────────────────────
       const FY = 730;
       doc.rect(0, FY, 612, 62).fill(NAVY);
       doc.rect(0, FY, 612, 2).fill(RED);
@@ -243,7 +284,7 @@ export async function GET(
       // Thank you message
       doc.font('Helvetica-Bold').fontSize(9).fillColor('#ffffff')
         .text('Thank you for choosing Roof Works of Texas!', 0, FY + 10, { width: 612, align: 'center' });
-      doc.font('Helvetica').fontSize(7.5).fillColor('#93c5fd')
+      doc.font('Helvetica').fontSize(7.5).fillColor('#fca5a5')
         .text(
           '(214) 795-3905  ·  info@roofworksoftexas.com  ·  roofworksoftexas.com',
           0, FY + 28, { width: 612, align: 'center' }

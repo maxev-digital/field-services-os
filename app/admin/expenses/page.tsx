@@ -105,7 +105,15 @@ export default function ExpensesPage() {
       const r = await fetch(`/api/admin/expenses?${params}`);
       const d = await r.json();
       setExpenses(d.expenses ?? []);
-      setStats(d.stats ?? { total_this_month: 0, total_this_year: 0, count: 0, top_category: '' });
+      const sum = d.summary ?? {};
+      const bycat: { category: string; total: number }[] = sum.byCategory ?? [];
+      const topCat = [...bycat].sort((a, b) => b.total - a.total)[0]?.category ?? '';
+      setStats({
+        total_this_month: sum.totalThisMonth ?? 0,
+        total_this_year:  sum.totalThisYear  ?? 0,
+        count:            d.total            ?? 0,
+        top_category:     topCat,
+      });
     } catch { /* noop */ }
     setLoading(false);
   }, [dateFrom, dateTo, filterCat, vendorSearch]);

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireAdmin } from '@/lib/admin-auth'
-import { prisma } from '@/lib/prisma'
+import prisma from '@/lib/prisma'
 import { sendEmail } from '@/lib/mailer'
 import { wrapInBrandedEmail } from '@/lib/brandedWrapper'
 

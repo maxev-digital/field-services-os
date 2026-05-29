@@ -8,6 +8,7 @@ import {
   ChevronLeft, ChevronRight, Megaphone, PhoneOff,
   Send, FileText, Plus, Trash2, Eye, Edit3, Save,
   AlertTriangle, CheckCircle, XCircle, Loader2, Copy,
+  Sparkles,
 } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -84,7 +85,10 @@ const SAMPLE_VARS: Record<string, string> = {
   website: 'acmeroofing.com',
 };
 
+const DEFAULT_BRAND_CONTEXT = 'Roof Works of Texas is a DFW roofing contractor specializing in storm damage repair for both residential and commercial properties. We work with insurance companies and offer free inspections.';
+
 type TabId = 'directory' | 'campaign' | 'templates';
+type AiTone = 'professional' | 'friendly' | 'urgent';
 
 // ─── Main Page Component ──────────────────────────────────────────────────────
 
@@ -148,6 +152,12 @@ export default function BusinessOutreachPage() {
 
   // Cache selected businesses for campaign view
   const [selectedBusinesses, setSelectedBusinesses] = useState<Business[]>([]);
+
+  // ─── AI Personalization State ─────────────────────────────────────────────
+  const [aiEnabled, setAiEnabled] = useState(false);
+  const [aiTone, setAiTone] = useState<AiTone>('professional');
+  const [aiGenerating, setAiGenerating] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
 
   // ─── Data Fetching ────────────────────────────────────────────────────────
 
@@ -296,6 +306,9 @@ export default function BusinessOutreachPage() {
     setCustomBody('');
     setSendResults(null);
     setSending(false);
+    setAiEnabled(false);
+    setAiTone('professional');
+    setAiError(null);
     setActiveTab('campaign');
   };
 
@@ -438,10 +451,65 @@ export default function BusinessOutreachPage() {
     if (!selectedTemplate) return;
     setSending(true);
     setSendProgress(0);
+    setAiError(null);
 
     try {
-      // Build IDs from all selected (including those in selected set but not in cached businesses)
       const ids = Array.from(selected);
+      let personalizations: Record<string, { subject: string; opening: string }> | undefined;
+
+      // Step 1: If AI is enabled, generate personalizations first
+      if (aiEnabled) {
+        setAiGenerating(true);
+        setSendProgress(10);
+
+        const bizPayload = selectedBusinesses
+          .filter(b => b.email)
+          .slice(0, 50)
+          .map(b => ({
+            id: b.id,
+            name: b.name,
+            category: b.category || 'general',
+            city: b.city || 'DFW',
+            rating: b.rating || 0,
+            review_count: b.review_count || 0,
+          }));
+
+        const tpl = editBeforeSend
+          ? { subject: customSubject, body: customBody }
+          : { subject: selectedTemplate.subject, body: selectedTemplate.body };
+
+        const aiRes = await fetch('/api/admin/ai/personalize-outreach', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            businesses: bizPayload,
+            template: tpl,
+            brandContext: DEFAULT_BRAND_CONTEXT,
+            tone: aiTone,
+          }),
+        });
+
+        const aiData = await aiRes.json();
+        setAiGenerating(false);
+
+        if (!aiRes.ok) {
+          setAiError(aiData.error || 'AI personalization failed');
+          // Continue without personalization — don't abort
+        } else if (aiData.personalizations) {
+          personalizations = {};
+          for (const p of aiData.personalizations) {
+            personalizations[p.id] = {
+              subject: p.personalizedSubject,
+              opening: p.personalizedOpening,
+            };
+          }
+        }
+
+        setSendProgress(40);
+      }
+
+      // Step 2: Send the emails
+      setSendProgress(50);
 
       const res = await fetch('/api/admin/business-outreach/send', {
         method: 'POST',
@@ -450,6 +518,7 @@ export default function BusinessOutreachPage() {
           business_ids: ids,
           template_id: selectedTemplate.id,
           mailbox: selectedMailbox,
+          ...(personalizations ? { personalizations } : {}),
         }),
       });
 
@@ -463,6 +532,7 @@ export default function BusinessOutreachPage() {
       alert(`Send error: ${err.message}`);
     } finally {
       setSending(false);
+      setAiGenerating(false);
     }
   };
 
@@ -1021,6 +1091,68 @@ export default function BusinessOutreachPage() {
                     </select>
                   </div>
 
+                  {/* ─── AI Personalization Toggle ─────────────────────────── */}
+                  <div className="mb-4 bg-gray-900 border border-gray-700 rounded-lg p-4">
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="flex items-center gap-2">
+                        <Sparkles className="w-4 h-4 text-red-400" />
+                        <span className="text-sm font-semibold text-white">AI Personalization</span>
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-600/20 text-red-400 font-bold uppercase tracking-wider">
+                          Beta
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => setAiEnabled(!aiEnabled)}
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                          aiEnabled ? 'bg-red-600' : 'bg-gray-600'
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                            aiEnabled ? 'translate-x-6' : 'translate-x-1'
+                          }`}
+                        />
+                      </button>
+                    </div>
+                    <p className="text-xs text-gray-500 mb-3">
+                      Uses AI to generate a unique subject line and opening paragraph for each business based on their category, location, and reputation.
+                    </p>
+
+                    {aiEnabled && (
+                      <div className="pt-3 border-t border-gray-700">
+                        <label className="block text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">
+                          Tone
+                        </label>
+                        <div className="flex gap-2">
+                          {([
+                            { value: 'professional' as AiTone, label: 'Professional', desc: 'Formal & authoritative' },
+                            { value: 'friendly' as AiTone, label: 'Friendly', desc: 'Warm & approachable' },
+                            { value: 'urgent' as AiTone, label: 'Urgent', desc: 'Time-sensitive & direct' },
+                          ]).map(t => (
+                            <button
+                              key={t.value}
+                              onClick={() => setAiTone(t.value)}
+                              className={`flex-1 px-3 py-2.5 rounded-lg border text-left transition-colors ${
+                                aiTone === t.value
+                                  ? 'border-red-600 bg-red-900/30 text-white'
+                                  : 'border-gray-700 bg-gray-800 text-gray-400 hover:border-gray-600'
+                              }`}
+                            >
+                              <p className="text-sm font-medium">{t.label}</p>
+                              <p className="text-[10px] text-gray-500 mt-0.5">{t.desc}</p>
+                            </button>
+                          ))}
+                        </div>
+                        {selectedWithEmail.length > 50 && (
+                          <p className="text-xs text-yellow-400 mt-2 flex items-center gap-1">
+                            <AlertTriangle className="w-3 h-3" />
+                            AI personalization limited to first 50 businesses with email
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
                   {/* Template preview */}
                   {selectedTemplate && (
                     <div className="space-y-4">
@@ -1120,6 +1252,22 @@ export default function BusinessOutreachPage() {
                     </div>
                   </div>
 
+                  {/* AI personalization badge */}
+                  {aiEnabled && (
+                    <div className="bg-red-900/20 border border-red-700/50 rounded-lg p-3 mb-4 flex items-start gap-2">
+                      <Sparkles className="w-4 h-4 text-red-400 mt-0.5 flex-shrink-0" />
+                      <div>
+                        <p className="text-sm text-red-300 font-medium">
+                          AI Personalization Enabled
+                        </p>
+                        <p className="text-xs text-red-400/70 mt-0.5">
+                          Each email will get a unique subject line and opening paragraph (tone: {aiTone}).
+                          AI will generate personalizations before sending.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
                   {editBeforeSend && (
                     <div className="bg-yellow-900/20 border border-yellow-700/50 rounded-lg p-3 mb-4 flex items-start gap-2">
                       <AlertTriangle className="w-4 h-4 text-yellow-500 mt-0.5 flex-shrink-0" />
@@ -1129,17 +1277,38 @@ export default function BusinessOutreachPage() {
                     </div>
                   )}
 
-                  {sending && (
+                  {/* Progress states */}
+                  {(sending || aiGenerating) && (
                     <div className="mb-6">
                       <div className="flex items-center gap-3 mb-2">
                         <Loader2 className="w-4 h-4 text-red-500 animate-spin" />
-                        <span className="text-sm text-gray-300">Sending emails...</span>
+                        <span className="text-sm text-gray-300">
+                          {aiGenerating
+                            ? 'Generating personalized emails with AI...'
+                            : 'Sending emails...'}
+                        </span>
                       </div>
                       <div className="w-full bg-gray-700 rounded-full h-2">
                         <div
                           className="bg-red-600 h-2 rounded-full transition-all duration-500"
                           style={{ width: `${sendProgress}%` }}
                         />
+                      </div>
+                      {aiGenerating && (
+                        <p className="text-xs text-gray-500 mt-1">
+                          AI is crafting unique openings for {Math.min(selectedWithEmail.length, 50)} businesses...
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {/* AI error warning (non-blocking) */}
+                  {aiError && (
+                    <div className="bg-yellow-900/20 border border-yellow-700/50 rounded-lg p-3 mb-4 flex items-start gap-2">
+                      <AlertTriangle className="w-4 h-4 text-yellow-500 mt-0.5 flex-shrink-0" />
+                      <div>
+                        <p className="text-sm text-yellow-300">AI personalization failed — sending with standard template</p>
+                        <p className="text-xs text-yellow-400/70 mt-0.5">{aiError}</p>
                       </div>
                     </div>
                   )}
@@ -1159,11 +1328,12 @@ export default function BusinessOutreachPage() {
                     >
                       {sending ? (
                         <>
-                          <Loader2 className="w-4 h-4 animate-spin" /> Sending...
+                          <Loader2 className="w-4 h-4 animate-spin" /> {aiGenerating ? 'Personalizing...' : 'Sending...'}
                         </>
                       ) : (
                         <>
-                          <Send className="w-4 h-4" /> Send Now
+                          {aiEnabled && <Sparkles className="w-4 h-4" />}
+                          <Send className="w-4 h-4" /> {aiEnabled ? 'Personalize & Send' : 'Send Now'}
                         </>
                       )}
                     </button>

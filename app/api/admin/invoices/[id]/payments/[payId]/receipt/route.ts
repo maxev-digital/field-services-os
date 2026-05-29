@@ -6,12 +6,12 @@ import path from 'path';
 import PDFDocument from 'pdfkit';
 import { drawCoverPage } from '@/lib/pdf-cover';
 
-const RED   = '#dc2626';
+const RED   = '#9b1c1c';
 const GRAY  = '#6b7280';
 const BLACK = '#1f2937';
-const LOGO_PATH = path.join(process.cwd(), 'public', 'images', 'logo.png');
+const LOGO_PATH = path.join(process.cwd(), 'public', 'images', 'main_logo_navy_red.png');
 const LOGO_H    = 66;
-const LOGO_W    = Math.round(LOGO_H * (1376 / 768));
+const LOGO_W    = Math.round(LOGO_H * (4600 / 4495));
 
 function fmt(n: number) {
   return `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -49,6 +49,15 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string;
     const chunks: Buffer[] = [];
     const doc = new PDFDocument({ margin: 50, size: 'LETTER' });
     doc.on('data', (chunk: Buffer) => chunks.push(chunk));
+      doc.on('pageAdded', () => {
+        doc.save();
+        doc.moveTo(4, 95).lineTo(4, 788).lineTo(608, 788).lineTo(608, 95)
+          .strokeColor('#1a2e4a').lineWidth(1.5).stroke();
+        doc.moveTo(9, 95).lineTo(9, 783).lineTo(603, 783).lineTo(603, 95)
+          .strokeColor('#9b1c1c').lineWidth(0.75).stroke();
+        doc.restore();
+      });
+
 
     await new Promise<void>((resolve) => {
       doc.on('end', resolve);
@@ -69,9 +78,9 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string;
       doc.font('Helvetica').fontSize(8).fillColor('#fecaca')
         .text('Roofing Contractor · DFW & North Texas', TX, 42)
         .text('(214) 795-3905  ·  info@roofworksoftexas.com  ·  roofworksoftexas.com', TX, 55);
-      doc.rect(0, 88, 700, 2).fill('#1e3a5f');
+      doc.rect(0, 88, 700, 2).fill('#1a2e4a');
       const RX = 420;
-      doc.rect(RX, 0, 700 - RX, 90).fill('#b91c1c');
+      doc.rect(RX, 0, 700 - RX, 90).fill('#7f1d1d');
       doc.font('Helvetica-Bold').fontSize(22).fillColor('#fff')
         .text('RECEIPT', RX + 4, 20, { width: R - RX + 14, align: 'right' });
       doc.font('Helvetica').fontSize(8.5).fillColor('#fecaca')

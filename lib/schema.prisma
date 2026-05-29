@@ -372,6 +372,7 @@ model storm_prospects {
   created_at        DateTime           @default(now())
   updated_at        DateTime           @updatedAt
   outreach_history  outreach_history[]
+  retell_calls      retell_calls[]
 }
 
 enum ProspectStatus {
@@ -518,4 +519,21 @@ model material_orders {
   notes       String?
   created_at  DateTime  @default(now())
   updated_at  DateTime  @updatedAt
+}
+
+// ─── Retell AI Call Tracking ─────────────────────────────────────────────────
+
+model retell_calls {
+  id                Int             @id @default(autoincrement())
+  prospect_id       String?
+  prospect          storm_prospects? @relation(fields: [prospect_id], references: [id], onDelete: SetNull)
+  call_id           String          @unique
+  agent_id          String
+  status            String          @default("dispatched")
+  duration_seconds  Int?
+  transcript        String?
+  call_summary      String?
+  disconnect_reason String?
+  created_at        DateTime        @default(now())
+  updated_at        DateTime        @updatedAt
 }

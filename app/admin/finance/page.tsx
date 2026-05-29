@@ -53,6 +53,36 @@ export default function PnlPage() {
   const profitChange = data && data.prior_period.net_profit !== 0
     ? ((data.net_profit - data.prior_period.net_profit) / Math.abs(data.prior_period.net_profit)) * 100 : 0;
 
+  function exportCSV() {
+    if (!data) return;
+    const rows: string[][] = [
+      ['Roof Works of Texas — P&L Report', data.period_label],
+      [],
+      ['REVENUE'],
+      ['Invoiced', data.revenue.invoiced.toFixed(2)],
+      ['Collected', data.revenue.collected.toFixed(2)],
+      ['Outstanding', data.revenue.outstanding.toFixed(2)],
+      [],
+      ['COSTS'],
+      ['Job Costs', data.costs.job_costs.toFixed(2)],
+      ['General Expenses', data.costs.general_expenses.toFixed(2)],
+      ...Object.entries(data.costs.expense_breakdown).map(([k, v]) => [
+        `  ${CATEGORY_LABELS[k] || k}`, (v as number).toFixed(2)
+      ]),
+      [],
+      ['NET PROFIT', data.net_profit.toFixed(2)],
+      ['MARGIN', data.margin_pct.toFixed(1) + '%'],
+    ];
+    const csv = rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `pnl-${data.period_label.replace(/\s/g, '-').toLowerCase()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   const ChangeArrow = ({ value }: { value: number }) => {
     if (Math.abs(value) < 0.1) return null;
     return (
@@ -71,8 +101,9 @@ export default function PnlPage() {
           <BarChart3 className="w-7 h-7 text-red-500" />
           <h1 className="text-2xl font-bold text-white">Profit & Loss Report</h1>
         </div>
-        <button className="flex items-center gap-2 bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
-          <Download className="w-4 h-4" /> Export
+        <button onClick={exportCSV} disabled={!data}
+          className="flex items-center gap-2 bg-gray-700 hover:bg-gray-600 disabled:opacity-40 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
+          <Download className="w-4 h-4" /> Export CSV
         </button>
       </div>
 

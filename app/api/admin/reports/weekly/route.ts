@@ -45,127 +45,129 @@ function getWeekBoundsCT(): { start: Date; end: Date } {
   return { start, end }
 }
 
+// ── Inline style helpers ─────────────────────────────────────────────────────
+
+const FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
+const TH = `background:#f9fafb;padding:10px 14px;text-align:left;font-size:13px;color:#374151;border-bottom:1px solid #e5e7eb;font-family:${FONT};`
+const TH_R = `background:#f9fafb;padding:10px 14px;text-align:right;font-size:13px;color:#374151;border-bottom:1px solid #e5e7eb;font-family:${FONT};`
+const TD = `padding:9px 14px;font-size:13px;color:#374151;border-bottom:1px solid #e5e7eb;font-family:${FONT};`
+const TD_R = `padding:9px 14px;font-size:13px;color:#374151;border-bottom:1px solid #e5e7eb;text-align:right;font-family:${FONT};`
+const SECTION = `font-size:16px;font-weight:700;color:#1f2937;padding:28px 0 8px;border-bottom:2px solid #dc2626;font-family:${FONT};`
+const NO_DATA = `color:#6b7280;font-style:italic;font-size:13px;padding:12px 0 24px;font-family:${FONT};`
+
 // ── Email builder ────────────────────────────────────────────────────────────
 
 function buildWeeklyEmail(data: any): string {
-  const s = `
-    <style>
-      .rw-table { width:100%; border-collapse:collapse; margin:12px 0 24px; }
-      .rw-table th { background:#1e1e2e; color:#f1f1f1; padding:10px 14px; text-align:left; font-size:13px; border-bottom:2px solid #dc2626; }
-      .rw-table td { padding:9px 14px; font-size:13px; color:#d1d1d1; border-bottom:1px solid #2a2a3e; }
-      .rw-table tr:nth-child(even) td { background:#16162a; }
-      .metric-card { display:inline-block; width:31%; vertical-align:top; background:#1e1e2e; border-radius:8px; padding:16px; margin:6px 1%; text-align:center; }
-      .metric-val { font-size:24px; font-weight:700; color:#dc2626; margin:0; }
-      .metric-label { font-size:11px; color:#9ca3af; margin:4px 0 0; text-transform:uppercase; letter-spacing:0.5px; }
-      .section-title { font-size:16px; font-weight:700; color:#f1f1f1; margin:28px 0 8px; padding-bottom:6px; border-bottom:2px solid #dc2626; }
-      .alert-box { background:#7f1d1d; border:1px solid #dc2626; border-radius:8px; padding:14px 18px; margin:8px 0; }
-      .alert-box p { margin:4px 0; color:#fca5a5; font-size:13px; }
-      .green { color:#22c55e !important; }
-      .no-data { color:#6b7280; font-style:italic; font-size:13px; }
-      .cash-row td:last-child { font-weight:700; }
-    </style>
-  `
-
   return `
 <!DOCTYPE html>
 <html><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/></head>
-<body style="margin:0;padding:0;background:#0f0f1a;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
-${s}
-<table width="100%" cellpadding="0" cellspacing="0" style="background:#0f0f1a;">
+<body style="margin:0;padding:0;background:#f9fafb;font-family:${FONT};">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f9fafb;">
 <tr><td align="center" style="padding:24px 12px;">
 <table width="640" cellpadding="0" cellspacing="0" style="max-width:640px;width:100%;">
 
   <!-- Header -->
-  <tr><td style="background:#dc2626;padding:20px 28px;border-radius:12px 12px 0 0;">
-    <p style="margin:0;font-size:20px;font-weight:700;color:#fff;">Roof Works of Texas</p>
-    <p style="margin:4px 0 0;font-size:13px;color:#fecaca;">Weekly Report &middot; ${data.weekLabel}</p>
+  <tr><td style="background:#dc2626;padding:20px 28px;">
+    <table width="100%" cellpadding="0" cellspacing="0"><tr>
+      <td style="font-size:20px;font-weight:700;color:#ffffff;font-family:${FONT};">Roof Works of Texas</td>
+    </tr><tr>
+      <td style="font-size:13px;color:#fecaca;padding-top:4px;font-family:${FONT};">Weekly Report &middot; ${data.weekLabel}</td>
+    </tr></table>
   </td></tr>
 
   <!-- Body -->
-  <tr><td style="background:#12121f;padding:28px;border-radius:0 0 12px 12px;">
+  <tr><td style="background:#ffffff;padding:28px;border:1px solid #e5e7eb;border-top:none;">
 
     <!-- P&L Summary Cards -->
-    <p class="section-title">P&L Summary</p>
-    <div style="text-align:center;">
-      <div class="metric-card">
-        <p class="metric-val green">${fmt$(data.pnl.revenue)}</p>
-        <p class="metric-label">Revenue</p>
-      </div>
-      <div class="metric-card">
-        <p class="metric-val" style="color:#f59e0b;">${fmt$(data.pnl.totalExpenses)}</p>
-        <p class="metric-label">Total Expenses</p>
-      </div>
-      <div class="metric-card">
-        <p class="metric-val" style="color:${data.pnl.netProfit >= 0 ? '#22c55e' : '#ef4444'};">${fmt$(data.pnl.netProfit)}</p>
-        <p class="metric-label">Net Profit (${fmtPct(data.pnl.margin)})</p>
-      </div>
-    </div>
-    <table class="rw-table">
-      <tr><th>Category</th><th style="text-align:right;">Amount</th></tr>
-      <tr><td>Revenue Collected</td><td style="text-align:right;color:#22c55e;">${fmt$(data.pnl.revenue)}</td></tr>
-      <tr><td>Job Costs</td><td style="text-align:right;">${fmt$(data.pnl.jobCosts)}</td></tr>
-      <tr><td>Business Expenses</td><td style="text-align:right;">${fmt$(data.pnl.businessExpenses)}</td></tr>
-      <tr style="font-weight:700;"><td>Net Profit</td><td style="text-align:right;color:${data.pnl.netProfit >= 0 ? '#22c55e' : '#ef4444'};">${fmt$(data.pnl.netProfit)}</td></tr>
+    <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="${SECTION}">P&L Summary</td></tr></table>
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin:12px 0 8px;">
+      <tr>
+        <td width="33%" style="padding:0 4px 8px 0;">
+          <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="background:#f3f4f6;padding:16px;text-align:center;border:1px solid #e5e7eb;">
+            <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="font-size:24px;font-weight:700;color:#16a34a;text-align:center;font-family:${FONT};">${fmt$(data.pnl.revenue)}</td></tr>
+            <tr><td style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;padding-top:4px;text-align:center;font-family:${FONT};">Revenue</td></tr></table>
+          </td></tr></table>
+        </td>
+        <td width="33%" style="padding:0 4px 8px 4px;">
+          <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="background:#f3f4f6;padding:16px;text-align:center;border:1px solid #e5e7eb;">
+            <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="font-size:24px;font-weight:700;color:#d97706;text-align:center;font-family:${FONT};">${fmt$(data.pnl.totalExpenses)}</td></tr>
+            <tr><td style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;padding-top:4px;text-align:center;font-family:${FONT};">Total Expenses</td></tr></table>
+          </td></tr></table>
+        </td>
+        <td width="33%" style="padding:0 0 8px 4px;">
+          <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="background:#f3f4f6;padding:16px;text-align:center;border:1px solid #e5e7eb;">
+            <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="font-size:24px;font-weight:700;color:${data.pnl.netProfit >= 0 ? '#16a34a' : '#dc2626'};text-align:center;font-family:${FONT};">${fmt$(data.pnl.netProfit)}</td></tr>
+            <tr><td style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;padding-top:4px;text-align:center;font-family:${FONT};">Net Profit (${fmtPct(data.pnl.margin)})</td></tr></table>
+          </td></tr></table>
+        </td>
+      </tr>
+    </table>
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin:12px 0 24px;border-collapse:collapse;">
+      <tr><th style="${TH}">Category</th><th style="${TH_R}">Amount</th></tr>
+      <tr><td style="${TD}">Revenue Collected</td><td style="${TD_R}color:#16a34a;">${fmt$(data.pnl.revenue)}</td></tr>
+      <tr><td style="${TD}">Job Costs</td><td style="${TD_R}">${fmt$(data.pnl.jobCosts)}</td></tr>
+      <tr><td style="${TD}">Business Expenses</td><td style="${TD_R}">${fmt$(data.pnl.businessExpenses)}</td></tr>
+      <tr><td style="${TD}font-weight:700;">Net Profit</td><td style="${TD_R}font-weight:700;color:${data.pnl.netProfit >= 0 ? '#16a34a' : '#dc2626'};">${fmt$(data.pnl.netProfit)}</td></tr>
     </table>
 
     <!-- Pipeline -->
-    <p class="section-title">Estimate Pipeline</p>
-    <table class="rw-table">
-      <tr><th>Status</th><th style="text-align:right;">Count</th><th style="text-align:right;">Value</th></tr>
-      ${data.pipeline.map((p: any) => `<tr><td>${p.status}</td><td style="text-align:right;">${p.count}</td><td style="text-align:right;">${fmt$(p.value)}</td></tr>`).join('')}
-      <tr style="font-weight:700;"><td>Total Pipeline</td><td style="text-align:right;">${data.pipeline.reduce((s: number, p: any) => s + p.count, 0)}</td><td style="text-align:right;">${fmt$(data.pipelineTotal)}</td></tr>
+    <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="${SECTION}">Estimate Pipeline</td></tr></table>
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin:12px 0 24px;border-collapse:collapse;">
+      <tr><th style="${TH}">Status</th><th style="${TH_R}">Count</th><th style="${TH_R}">Value</th></tr>
+      ${data.pipeline.map((p: any) => `<tr><td style="${TD}">${p.status}</td><td style="${TD_R}">${p.count}</td><td style="${TD_R}">${fmt$(p.value)}</td></tr>`).join('')}
+      <tr><td style="${TD}font-weight:700;">Total Pipeline</td><td style="${TD_R}font-weight:700;">${data.pipeline.reduce((s: number, p: any) => s + p.count, 0)}</td><td style="${TD_R}font-weight:700;">${fmt$(data.pipelineTotal)}</td></tr>
     </table>
 
     <!-- Jobs Completed -->
-    <p class="section-title">Jobs Completed This Week</p>
+    <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="${SECTION}">Jobs Completed This Week</td></tr></table>
     ${data.completedJobs.length > 0 ? `
-    <table class="rw-table">
-      <tr><th>Address</th><th>Customer</th><th style="text-align:right;">Amount</th></tr>
-      ${data.completedJobs.map((j: any) => `<tr><td>${j.address}</td><td>${j.customer}</td><td style="text-align:right;">${fmt$(j.amount)}</td></tr>`).join('')}
-    </table>` : '<p class="no-data">No jobs completed this week.</p>'}
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin:12px 0 24px;border-collapse:collapse;">
+      <tr><th style="${TH}">Address</th><th style="${TH}">Customer</th><th style="${TH_R}">Amount</th></tr>
+      ${data.completedJobs.map((j: any) => `<tr><td style="${TD}">${j.address}</td><td style="${TD}">${j.customer}</td><td style="${TD_R}">${fmt$(j.amount)}</td></tr>`).join('')}
+    </table>` : `<table width="100%" cellpadding="0" cellspacing="0"><tr><td style="${NO_DATA}">No jobs completed this week.</td></tr></table>`}
 
     <!-- Top Expense Categories -->
-    <p class="section-title">Top Expense Categories</p>
+    <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="${SECTION}">Top Expense Categories</td></tr></table>
     ${data.expensesByCategory.length > 0 ? `
-    <table class="rw-table">
-      <tr><th>Category</th><th style="text-align:right;">Amount</th></tr>
-      ${data.expensesByCategory.map((e: any) => `<tr><td style="text-transform:capitalize;">${e.category.replace(/_/g, ' ')}</td><td style="text-align:right;">${fmt$(e.total)}</td></tr>`).join('')}
-    </table>` : '<p class="no-data">No expenses recorded this week.</p>'}
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin:12px 0 24px;border-collapse:collapse;">
+      <tr><th style="${TH}">Category</th><th style="${TH_R}">Amount</th></tr>
+      ${data.expensesByCategory.map((e: any) => `<tr><td style="${TD}text-transform:capitalize;">${e.category.replace(/_/g, ' ')}</td><td style="${TD_R}">${fmt$(e.total)}</td></tr>`).join('')}
+    </table>` : `<table width="100%" cellpadding="0" cellspacing="0"><tr><td style="${NO_DATA}">No expenses recorded this week.</td></tr></table>`}
 
     <!-- Outreach Performance -->
-    <p class="section-title">Outreach Performance</p>
-    <table class="rw-table">
-      <tr><th>Metric</th><th style="text-align:right;">Value</th></tr>
-      <tr><td>Emails Sent</td><td style="text-align:right;">${data.outreach.sent}</td></tr>
-      <tr><td>New Prospects Converted</td><td style="text-align:right;">${data.outreach.newConverted}</td></tr>
+    <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="${SECTION}">Outreach Performance</td></tr></table>
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin:12px 0 24px;border-collapse:collapse;">
+      <tr><th style="${TH}">Metric</th><th style="${TH_R}">Value</th></tr>
+      <tr><td style="${TD}">Emails Sent</td><td style="${TD_R}">${data.outreach.sent}</td></tr>
+      <tr><td style="${TD}">New Prospects Converted</td><td style="${TD_R}">${data.outreach.newConverted}</td></tr>
     </table>
 
     <!-- Subcontractor Payments -->
-    <p class="section-title">Subcontractor Payments</p>
+    <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="${SECTION}">Subcontractor Payments</td></tr></table>
     ${data.subPayments.length > 0 ? `
-    <table class="rw-table">
-      <tr><th>Subcontractor</th><th style="text-align:right;">Amount</th><th>1099 Status</th></tr>
-      ${data.subPayments.map((s: any) => `<tr><td>${s.name}</td><td style="text-align:right;">${fmt$(s.weekTotal)}</td><td style="color:${s.needs1099 ? '#ef4444' : '#22c55e'};">${s.needs1099 ? 'Needs Attention (' + fmt$(s.yearTotal) + ' YTD)' : 'OK'}</td></tr>`).join('')}
-    </table>` : '<p class="no-data">No sub payments this week.</p>'}
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin:12px 0 24px;border-collapse:collapse;">
+      <tr><th style="${TH}">Subcontractor</th><th style="${TH_R}">Amount</th><th style="${TH}">1099 Status</th></tr>
+      ${data.subPayments.map((s: any) => `<tr><td style="${TD}">${s.name}</td><td style="${TD_R}">${fmt$(s.weekTotal)}</td><td style="${TD}color:${s.needs1099 ? '#dc2626' : '#16a34a'};">${s.needs1099 ? 'Needs Attention (' + fmt$(s.yearTotal) + ' YTD)' : 'OK'}</td></tr>`).join('')}
+    </table>` : `<table width="100%" cellpadding="0" cellspacing="0"><tr><td style="${NO_DATA}">No sub payments this week.</td></tr></table>`}
 
     <!-- Cash Flow -->
-    <p class="section-title">Cash Flow</p>
-    <table class="rw-table cash-row">
-      <tr><th>Direction</th><th style="text-align:right;">Amount</th></tr>
-      <tr><td style="color:#22c55e;">Money In</td><td style="text-align:right;color:#22c55e;">${fmt$(data.cashFlow.moneyIn)}</td></tr>
-      <tr><td style="color:#ef4444;">Money Out</td><td style="text-align:right;color:#ef4444;">${fmt$(data.cashFlow.moneyOut)}</td></tr>
-      <tr style="font-weight:700;"><td>Net</td><td style="text-align:right;color:${data.cashFlow.net >= 0 ? '#22c55e' : '#ef4444'};">${fmt$(data.cashFlow.net)}</td></tr>
+    <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="${SECTION}">Cash Flow</td></tr></table>
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin:12px 0 24px;border-collapse:collapse;">
+      <tr><th style="${TH}">Direction</th><th style="${TH_R}">Amount</th></tr>
+      <tr><td style="${TD}color:#16a34a;">Money In</td><td style="${TD_R}color:#16a34a;">${fmt$(data.cashFlow.moneyIn)}</td></tr>
+      <tr><td style="${TD}color:#dc2626;">Money Out</td><td style="${TD_R}color:#dc2626;">${fmt$(data.cashFlow.moneyOut)}</td></tr>
+      <tr><td style="${TD}font-weight:700;">Net</td><td style="${TD_R}font-weight:700;color:${data.cashFlow.net >= 0 ? '#16a34a' : '#dc2626'};">${fmt$(data.cashFlow.net)}</td></tr>
     </table>
 
     <!-- Action Items -->
     ${data.actionItems.length > 0 ? `
-    <p class="section-title">Action Items</p>
-    ${data.actionItems.map((a: string) => `<div class="alert-box"><p>${a}</p></div>`).join('')}
+    <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="${SECTION}">Action Items</td></tr></table>
+    ${data.actionItems.map((a: string) => `<table width="100%" cellpadding="0" cellspacing="0" style="margin:8px 0;"><tr><td style="background:#fef2f2;border:1px solid #fecaca;padding:14px 18px;"><table width="100%" cellpadding="0" cellspacing="0"><tr><td style="color:#991b1b;font-size:13px;font-family:${FONT};">${a}</td></tr></table></td></tr></table>`).join('')}
     ` : ''}
 
-    <p style="color:#6b7280;font-size:11px;margin:32px 0 0;text-align:center;">
+    <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="color:#9ca3af;font-size:11px;padding-top:32px;text-align:center;font-family:${FONT};">
       Automated weekly report from ${brand.name} Admin
-    </p>
+    </td></tr></table>
 
   </td></tr>
 </table>

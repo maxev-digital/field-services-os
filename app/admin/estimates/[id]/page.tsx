@@ -32,7 +32,7 @@ interface ChangeOrder {
 interface Estimate {
   id: string; address: string; insurer: string | null; claim_no: string | null;
   adj_date: string | null; insurance_total: number; our_total: number;
-  savings: number; savings_pct: number; status: EstimateStatus;
+  savings: number; savings_pct: number; discount_pct: number; status: EstimateStatus;
   created_at: string; sent_at: string | null; approved_at: string | null;
   job_id: string | null;
   customer: { id: string; name: string; phone: string; email: string | null; address: string | null };
@@ -53,6 +53,15 @@ interface Signature {
 interface Payment {
   id: string; amount: number; method: string;
   reference_no: string | null; notes: string | null; paid_at: string;
+}
+
+interface CatalogMasterItem {
+  id: string; label: string; category: string; unit: string;
+  xactimate: number; ours: number; active: boolean;
+}
+
+interface Note {
+  id: string; body: string; created_at: string;
 }
 
 const STATUS_FLOW: EstimateStatus[] = ['DRAFT', 'SENT', 'APPROVED', 'DECLINED', 'INVOICED', 'PAID'];
@@ -1012,12 +1021,28 @@ export default function EstimateDetailPage() {
   const router    = useRouter();
   const [estimate, setEstimate]         = useState<Estimate | null>(null);
   const [loading, setLoading]           = useState(true);
+  const [inspection, setInspection]     = useState<{ id: string; address: string; status: string } | null>(null);
   const [showCO, setShowCO]             = useState(false);
   const [updatingStatus, setUpdStatus]  = useState(false);
   const [converting, setConverting]     = useState(false);
   const [generatingInv, setGenInv]      = useState(false);
+  const [sendingSig,   setSendingSig]   = useState(false);
+  const [sigSent,      setSigSent]      = useState(false);
   const [expandedCOs, setExpandedCOs]   = useState<Record<string, boolean>>({});
   const [deleting, setDeleting]         = useState(false);
+
+  const [catalog, setCatalog]                   = useState<CatalogMasterItem[]>([]);
+  const [catalogQtyInputs, setCatalogQtyInputs] = useState<Record<string, string>>({});
+  const [addingItemId, setAddingItemId]         = useState<string | null>(null);
+  const [removingItemId, setRemovingItemId]     = useState<string | null>(null);
+  const [editingLineItem, setEditingLineItem]   = useState<{ id: string; qty: string; xactimate_per_unit: string; our_per_unit: string } | null>(null);
+  const [savingLineEdit, setSavingLineEdit]     = useState(false);
+  const [discountInput, setDiscountInput]       = useState('');
+  const [savingDiscount, setSavingDiscount]     = useState(false);
+
+  const [notes, setNotes]           = useState<Note[]>([]);
+  const [noteInput, setNoteInput]   = useState('');
+  const [savingNote, setSavingNote] = useState(false);
 
   // Send Email modal
   const [estEmailOpen, setEstEmailOpen]       = useState(false);
@@ -1046,7 +1071,13 @@ export default function EstimateDetailPage() {
     const res = await fetch(`/api/admin/estimates/${id}`);
     const data = await res.json();
     setEstimate(data.estimate);
+    setDiscountInput(String(data.estimate?.discount_pct ?? 0));
     setLoading(false);
+    if (data.estimate?.customer?.id) {
+      fetch(`/api/admin/inspections?customer_id=${data.estimate.customer.id}`)
+        .then((r) => r.json())
+        .then((d) => { if (d.reports?.length) setInspection(d.reports[0]); });
+    }
   };
 
   useEffect(() => { load(); }, [id]);
@@ -1057,6 +1088,38 @@ export default function EstimateDetailPage() {
       .then(d => { if (d.contractorSig) setPacketSig(d.contractorSig) })
       .catch(() => {})
   }, [])
+
+  useEffect(() => {
+    fetch('/api/admin/line-items')
+      .then(r => r.json())
+      .then(d => setCatalog((d.items || []).filter((i: CatalogMasterItem) => i.active)));
+  }, []);
+
+  const loadNotes = () => {
+    fetch(`/api/admin/estimates/${id}/comments`)
+      .then(r => r.json())
+      .then(d => setNotes(d.notes || []));
+  };
+
+  useEffect(() => { loadNotes(); }, [id]);
+
+  const addNote = async () => {
+    if (!noteInput.trim()) return;
+    setSavingNote(true);
+    await fetch(`/api/admin/estimates/${id}/comments`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ body: noteInput }),
+    });
+    setNoteInput('');
+    setSavingNote(false);
+    loadNotes();
+  };
+
+  const deleteNote = async (noteId: string) => {
+    await fetch(`/api/admin/estimates/${id}/comments?comment_id=${noteId}`, { method: 'DELETE' });
+    loadNotes();
+  };
 
   const updateStatus = async (status: string) => {
     setUpdStatus(true);
@@ -1095,6 +1158,28 @@ export default function EstimateDetailPage() {
     finally { setPacketSending(false) }
   }
 
+  const sendForSignature = async () => {
+    if (!estimate.customer?.email) {
+      alert('This estimate has no customer email on file. Add an email to the customer record first.');
+      return;
+    }
+    setSendingSig(true);
+    try {
+      const res = await fetch(`/api/admin/estimates/${id}/send-for-signature`, {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to send');
+      setSigSent(true);
+      setTimeout(() => setSigSent(false), 4000);
+    } catch (e: any) {
+      alert('Send failed: ' + e.message);
+    } finally {
+      setSendingSig(false);
+    }
+  };
+
   const deleteEstimate = async () => {
     if (!confirm('Delete this estimate and all associated data? This cannot be undone.')) return;
     setDeleting(true);
@@ -1108,6 +1193,54 @@ export default function EstimateDetailPage() {
     } finally {
       setDeleting(false);
     }
+  };
+
+  const saveLineItemEdit = async () => {
+    if (!editingLineItem) return;
+    setSavingLineEdit(true);
+    await fetch(`/api/admin/estimates/${id}/line-items?item_id=${editingLineItem.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        qty: editingLineItem.qty,
+        xactimate_per_unit: editingLineItem.xactimate_per_unit,
+        our_per_unit: editingLineItem.our_per_unit,
+      }),
+    });
+    setSavingLineEdit(false);
+    setEditingLineItem(null);
+    await load();
+  };
+
+  const saveDiscount = async () => {
+    setSavingDiscount(true);
+    await fetch(`/api/admin/estimates/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ discount_pct: parseFloat(discountInput) || 0 }),
+    });
+    setSavingDiscount(false);
+    await load();
+  };
+
+  const addCatalogItem = async (item: CatalogMasterItem) => {
+    const qty = parseFloat(catalogQtyInputs[item.id] || '1') || 1;
+    setAddingItemId(item.id);
+    await fetch(`/api/admin/estimates/${id}/line-items`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ line_item_id: item.id, qty }),
+    });
+    setAddingItemId(null);
+    setCatalogQtyInputs(prev => ({ ...prev, [item.id]: '' }));
+    await load();
+  };
+
+  const removeLineItem = async (itemId: string) => {
+    setRemovingItemId(itemId);
+    await fetch(`/api/admin/estimates/${id}/line-items?item_id=${itemId}`, { method: 'DELETE' });
+    setRemovingItemId(null);
+    await load();
   };
 
   const generateInvoice = async () => {
@@ -1182,6 +1315,15 @@ export default function EstimateDetailPage() {
             </a>
           )}
           <button
+            onClick={sendForSignature}
+            disabled={sendingSig || !estimate.customer?.email}
+            title={!estimate.customer?.email ? 'No customer email on file' : 'Email customer a secure signing link'}
+            className="flex items-center gap-2 px-4 py-2 bg-indigo-700 hover:bg-indigo-600 disabled:opacity-40 text-white text-sm font-semibold rounded-lg transition-colors"
+          >
+            <Send className="w-4 h-4" />
+            {sigSent ? 'Sent!' : sendingSig ? 'Sending...' : 'Send for Signature'}
+          </button>
+          <button
             onClick={deleteEstimate}
             disabled={deleting}
             className="flex items-center gap-2 px-3 py-2 bg-red-950 hover:bg-red-900 text-red-400 text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
@@ -1209,6 +1351,28 @@ export default function EstimateDetailPage() {
             ))}
           </div>
 
+          {/* Discount */}
+          <div className="bg-gray-800 border border-gray-700 rounded-xl p-4 flex items-center gap-3">
+            <span className="text-sm text-gray-400 flex-1">Discount applied to Roof Works Price</span>
+            <input
+              type="number"
+              min="0"
+              max="100"
+              step="0.5"
+              value={discountInput}
+              onChange={e => setDiscountInput(e.target.value)}
+              className="w-24 px-2 py-1.5 bg-gray-700 border border-gray-600 rounded-lg text-sm text-white text-right focus:outline-none focus:border-red-500"
+            />
+            <span className="text-sm text-gray-400">%</span>
+            <button
+              onClick={saveDiscount}
+              disabled={savingDiscount}
+              className="px-3 py-1.5 bg-red-700 hover:bg-red-600 disabled:opacity-50 text-white text-xs font-semibold rounded-lg transition-colors"
+            >
+              {savingDiscount ? 'Saving...' : 'Apply'}
+            </button>
+          </div>
+
           {/* Line Items */}
           <div className="bg-gray-800 border border-gray-700 rounded-xl overflow-hidden">
             <div className="px-4 py-3 border-b border-gray-700">
@@ -1223,24 +1387,76 @@ export default function EstimateDetailPage() {
                   <th className="px-4 py-2 text-right text-gray-400 font-medium">Insurance</th>
                   <th className="px-4 py-2 text-right text-gray-400 font-medium">Ours</th>
                   <th className="px-4 py-2 text-right text-gray-400 font-medium">Delta</th>
+                  <th className="px-2 py-2 w-8"></th>
                 </tr>
               </thead>
               <tbody>
                 {Array.from(grouped.entries()).map(([cat, items]) => (
                   <>
                     <tr key={`cat-${cat}`} className="bg-gray-700/30">
-                      <td colSpan={6} className="px-4 py-1.5 text-xs font-bold text-gray-400 uppercase tracking-wider">{cat}</td>
+                      <td colSpan={7} className="px-4 py-1.5 text-xs font-bold text-gray-400 uppercase tracking-wider">{cat}</td>
                     </tr>
-                    {items.map(li => (
-                      <tr key={li.id} className="border-b border-gray-700/40 hover:bg-gray-700/20">
-                        <td className="px-4 py-2 text-gray-300">{li.label}</td>
-                        <td className="px-4 py-2 text-right text-gray-300">{li.qty}</td>
-                        <td className="px-4 py-2 text-right text-gray-400">{li.unit}</td>
-                        <td className="px-4 py-2 text-right text-gray-400 font-mono">{fmt(li.ins_amt)}</td>
-                        <td className="px-4 py-2 text-right text-white font-mono">{fmt(li.our_amt)}</td>
-                        <td className="px-4 py-2 text-right text-green-400 font-mono">{fmt(li.delta)}</td>
-                      </tr>
-                    ))}
+                    {items.map(li => {
+                      const isEditing = editingLineItem?.id === li.id;
+                      const eq = editingLineItem;
+                      const previewIns = isEditing && eq ? (parseFloat(eq.qty)||0)*(parseFloat(eq.xactimate_per_unit)||0) : li.ins_amt;
+                      const previewOur = isEditing && eq ? (parseFloat(eq.qty)||0)*(parseFloat(eq.our_per_unit)||0) : li.our_amt;
+                      return (
+                        <tr key={li.id} className={`border-b border-gray-700/40 ${isEditing ? 'bg-gray-700/40' : 'hover:bg-gray-700/20'}`}>
+                          <td className="px-4 py-2 text-gray-300">{li.label}</td>
+                          <td className="px-2 py-1.5 text-right">
+                            {isEditing ? (
+                              <input type="number" min="0.01" step="0.25" value={eq!.qty}
+                                onChange={e => setEditingLineItem(p => p && ({ ...p, qty: e.target.value }))}
+                                className="w-20 px-1.5 py-1 bg-gray-600 border border-gray-500 rounded text-xs text-white text-right focus:outline-none focus:border-red-500" />
+                            ) : <span className="text-gray-300">{li.qty}</span>}
+                          </td>
+                          <td className="px-4 py-2 text-right text-gray-400">{li.unit}</td>
+                          <td className="px-2 py-1.5 text-right">
+                            {isEditing ? (
+                              <input type="number" min="0" step="0.01" value={eq!.xactimate_per_unit}
+                                onChange={e => setEditingLineItem(p => p && ({ ...p, xactimate_per_unit: e.target.value }))}
+                                className="w-24 px-1.5 py-1 bg-gray-600 border border-gray-500 rounded text-xs text-white text-right focus:outline-none focus:border-red-500" />
+                            ) : <span className="text-gray-400 font-mono">{fmt(li.ins_amt)}</span>}
+                          </td>
+                          <td className="px-2 py-1.5 text-right">
+                            {isEditing ? (
+                              <input type="number" min="0" step="0.01" value={eq!.our_per_unit}
+                                onChange={e => setEditingLineItem(p => p && ({ ...p, our_per_unit: e.target.value }))}
+                                className="w-24 px-1.5 py-1 bg-gray-600 border border-gray-500 rounded text-xs text-white text-right focus:outline-none focus:border-red-500" />
+                            ) : <span className="text-white font-mono">{fmt(li.our_amt)}</span>}
+                          </td>
+                          <td className="px-4 py-2 text-right text-green-400 font-mono">
+                            {isEditing ? fmt(previewIns - previewOur) : fmt(li.delta)}
+                          </td>
+                          <td className="px-2 py-1.5 text-center">
+                            {isEditing ? (
+                              <div className="flex gap-1 justify-center">
+                                <button onClick={saveLineItemEdit} disabled={savingLineEdit}
+                                  className="px-2 py-0.5 bg-green-700 hover:bg-green-600 disabled:opacity-50 text-white text-xs rounded transition-colors">
+                                  {savingLineEdit ? '...' : 'Save'}
+                                </button>
+                                <button onClick={() => setEditingLineItem(null)}
+                                  className="px-2 py-0.5 bg-gray-600 hover:bg-gray-500 text-white text-xs rounded transition-colors">
+                                  Cancel
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="flex gap-1.5 justify-center">
+                                <button onClick={() => setEditingLineItem({ id: li.id, qty: String(li.qty), xactimate_per_unit: String(li.xactimate_per_unit), our_per_unit: String(li.our_per_unit) })}
+                                  className="text-gray-600 hover:text-blue-400 transition-colors">
+                                  <Edit2 className="w-3.5 h-3.5" />
+                                </button>
+                                <button onClick={() => removeLineItem(li.id)} disabled={removingItemId === li.id}
+                                  className="text-gray-600 hover:text-red-400 disabled:opacity-40 transition-colors">
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </>
                 ))}
                 <tr className="bg-gray-700/50 font-semibold">
@@ -1248,10 +1464,60 @@ export default function EstimateDetailPage() {
                   <td className="px-4 py-3 text-right text-gray-300 font-mono">{fmt(estimate.insurance_total)}</td>
                   <td className="px-4 py-3 text-right text-white font-mono">{fmt(estimate.our_total)}</td>
                   <td className="px-4 py-3 text-right text-green-400 font-mono">{fmt(estimate.savings)}</td>
+                  <td></td>
                 </tr>
               </tbody>
             </table>
           </div>
+
+          {/* Add Line Items from Catalog */}
+          {(() => {
+            const catalogGrouped = new Map<string, CatalogMasterItem[]>();
+            for (const item of catalog) {
+              if (!catalogGrouped.has(item.category)) catalogGrouped.set(item.category, []);
+              catalogGrouped.get(item.category)!.push(item);
+            }
+            return (
+              <div className="bg-gray-800 border border-gray-700 rounded-xl overflow-hidden">
+                <div className="px-4 py-3 border-b border-gray-700 flex items-center gap-2">
+                  <Plus className="w-4 h-4 text-gray-400" />
+                  <h2 className="text-sm font-semibold text-white">Add Line Items</h2>
+                </div>
+                <div className="divide-y divide-gray-700/50">
+                  {Array.from(catalogGrouped.entries()).map(([cat, items]) => (
+                    <div key={cat} className="px-4 py-3">
+                      <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">{cat}</p>
+                      <div className="space-y-1">
+                        {items.map(item => (
+                          <div key={item.id} className="flex items-center gap-2">
+                            <span className="flex-1 text-sm text-gray-300 truncate">{item.label}</span>
+                            <span className="text-xs text-gray-500 w-6">{item.unit}</span>
+                            <span className="text-xs text-gray-500 w-16 text-right font-mono">{fmt(item.ours)}</span>
+                            <input
+                              type="number"
+                              min="0.01"
+                              step="0.25"
+                              placeholder="Qty"
+                              value={catalogQtyInputs[item.id] ?? ''}
+                              onChange={e => setCatalogQtyInputs(prev => ({ ...prev, [item.id]: e.target.value }))}
+                              className="w-20 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-xs text-white text-right focus:outline-none focus:border-red-500"
+                            />
+                            <button
+                              onClick={() => addCatalogItem(item)}
+                              disabled={addingItemId === item.id}
+                              className="px-2.5 py-1 bg-red-700 hover:bg-red-600 disabled:opacity-50 text-white text-xs font-semibold rounded transition-colors"
+                            >
+                              {addingItemId === item.id ? '...' : 'Add'}
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Change Orders */}
           {estimate.change_orders.length > 0 && (
@@ -1293,6 +1559,49 @@ export default function EstimateDetailPage() {
               </div>
             </div>
           )}
+
+          {/* Comments / Project Notes */}
+          <div className="bg-gray-800 border border-gray-700 rounded-xl overflow-hidden">
+            <div className="px-4 py-3 border-b border-gray-700">
+              <h2 className="text-sm font-semibold text-white">Comments</h2>
+            </div>
+            <div className="p-4 space-y-3">
+              <div className="flex gap-2">
+                <textarea
+                  value={noteInput}
+                  onChange={e => setNoteInput(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) addNote(); }}
+                  placeholder="Add a note about this project..."
+                  rows={3}
+                  className="flex-1 px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-sm text-white placeholder-gray-500 focus:outline-none focus:border-red-500 resize-none"
+                />
+                <button
+                  onClick={addNote}
+                  disabled={savingNote || !noteInput.trim()}
+                  className="px-3 py-2 bg-red-700 hover:bg-red-600 disabled:opacity-40 text-white text-xs font-semibold rounded-lg transition-colors self-start"
+                >
+                  {savingNote ? '...' : 'Add'}
+                </button>
+              </div>
+              {notes.length === 0 && (
+                <p className="text-xs text-gray-500 italic">No comments yet.</p>
+              )}
+              {notes.map(n => (
+                <div key={n.id} className="bg-gray-700/50 rounded-lg px-3 py-2.5 group">
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="text-sm text-gray-200 whitespace-pre-wrap flex-1">{n.body}</p>
+                    <button
+                      onClick={() => deleteNote(n.id)}
+                      className="opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400 transition-all flex-shrink-0 mt-0.5"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-1">{fmtDate(n.created_at)}</p>
+                </div>
+              ))}
+            </div>
+          </div>
 
           {/* EagleView Measurement */}
           <MeasurementPanel estimateId={id} />
@@ -1362,6 +1671,11 @@ export default function EstimateDetailPage() {
               <a href={`/admin/customers/${estimate.customer.id}`} className="text-xs text-red-400 hover:text-red-300">
                 View full customer record →
               </a>
+              {inspection && (
+                <a href={`/admin/inspections/${inspection.id}`} className="text-xs text-blue-400 hover:text-blue-300">
+                  View Inspection Report →
+                </a>
+              )}
             </div>
           </div>
 

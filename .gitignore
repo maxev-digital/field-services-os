@@ -1,7 +1,86 @@
+# Dependencies
 node_modules/
+.pnp
+.pnp.js
+
+# Next.js
 .next/
+/out/
+/build
+
+# Env files — never commit
 .env
-*.log
-uploads/
-dist/
+.env.*
+.env.local
+.env.production
+.env.development
+.env.test
+
+# Credentials & secrets
+credentials/
+*.pem
+*.ppk
+*.key
+client_secret.json
+
+# Database files
+*.db
+*.db-shm
+*.db-wal
+prisma/dev.db
+prisma/*.db
+
+# Python virtualenvs & cache
+venv/
+**/venv/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Internal AI context
+CLAUDE.md
+AGENTS.md
+
+# Debug / one-off scripts (not production code)
+check_*.js
+retag_*.js
+tag_*.js
+swath_*.js
+batch_*.js
+area_*.js
+debug_*.js
+test_*.js
+export_*.js
+find_*.js
+fire_*.js
+ftworth_*.js
+morning_*.js
+monitor.js
+sinch-poller.js
+total_phones.js
+full_audit.js
+run_migration.js
+add_dnc_and_results.js
+
+# Backup files
+*.bak
+*.bak_*
+
+# Data files with potential config/secrets
+data/admin-settings.json
+data/inbound-call-settings.json
+
+# OS
 .DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts

@@ -1,4 +1,5 @@
 'use client'
+import EvOrderWidget from '@/components/EvOrderWidget'
 
 import { Fragment, useEffect, useRef, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
@@ -823,6 +824,18 @@ export default function CustomerDetailPage() {
                 <Plus className="w-3.5 h-3.5" /> New Estimate
               </button>
             </div>
+            {/* EagleView — order by customer address before creating an estimate */}
+            {customer.address && (
+              <div className="px-5 py-4 border-b border-gray-800">
+                <p className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-1">EagleView Measurement</p>
+                <p className="text-xs text-gray-600 mb-2">{customer.address}</p>
+                <EvOrderWidget
+                  address={customer.address}
+                  customerId={id}
+                  compact={true}
+                />
+              </div>
+            )}
             {customer.estimates.length === 0 ? (
               <div className="px-5 py-10 text-center text-gray-500 text-sm">No estimates yet.</div>
             ) : (

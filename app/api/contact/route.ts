@@ -6,6 +6,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import { notifyNewContact } from '@/lib/notify';
+import { notifyNewContact as tgNotifyContact } from '@/lib/telegram-notify';
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin':  '*',
@@ -57,6 +58,21 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    // ── Insert admin notification for new contact ─────────────────────────
+    try {
+      await prisma.$executeRaw`
+        INSERT INTO admin_notifications (id, type, title, message, data)
+        VALUES (
+          gen_random_uuid()::text,
+          'new_contact',
+          ${'New Contact — ' + name.trim()},
+          ${name.trim() + ': ' + message.trim().slice(0, 100)},
+          ${JSON.stringify({ customerName: name.trim(), phone: phone.trim(), email: email?.trim() || null, message: message.trim() })}::jsonb
+        )`;
+    } catch (e: any) {
+      console.error('[contact] Failed to insert notification:', e.message);
+    }
+
     // Fire admin notification — non-blocking
     notifyNewContact({
       name:    name.trim(),
@@ -65,6 +81,9 @@ export async function POST(req: NextRequest) {
       message: message.trim(),
       source:  source || 'Contact Form',
     });
+
+    // Telegram push
+    tgNotifyContact(name.trim(), phone.trim(), message.trim()).catch(() => {});
 
     return NextResponse.json(
       { success: true, message: "Thanks! We'll be in touch within 24 hours." },

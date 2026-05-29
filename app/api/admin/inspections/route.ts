@@ -3,11 +3,14 @@ import { requireAdmin } from '@/lib/admin-auth';
 import prisma from '@/lib/prisma';
 import { INSPECTION_SECTIONS } from '@/lib/inspection-sections';
 
-export async function GET(_req: NextRequest) {
+export async function GET(req: NextRequest) {
   try {
     await requireAdmin();
+    const { searchParams } = new URL(req.url);
+    const customerId = searchParams.get('customer_id');
 
     const reports = await prisma.inspection_reports.findMany({
+      where: customerId ? { customer_id: customerId } : undefined,
       orderBy: { created_at: 'desc' },
       include: {
         customer: { select: { id: true, name: true } },

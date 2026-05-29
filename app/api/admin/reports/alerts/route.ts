@@ -15,58 +15,64 @@ interface AlertSection {
   severity: 'critical' | 'warning' | 'info'
 }
 
+const FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
+
 function buildAlertsEmail(sections: AlertSection[]): string {
-  const severityColors = {
-    critical: { bg: '#7f1d1d', border: '#ef4444', text: '#fca5a5', badge: '#ef4444' },
-    warning:  { bg: '#78350f', border: '#f59e0b', text: '#fde68a', badge: '#f59e0b' },
-    info:     { bg: '#1e1e2e', border: '#3b82f6', text: '#93c5fd', badge: '#3b82f6' },
+  const severityStyles = {
+    critical: { bg: '#fef2f2', border: '#fecaca', text: '#991b1b', badge: '#dc2626', badgeBg: '#fef2f2' },
+    warning:  { bg: '#fffbeb', border: '#fde68a', text: '#92400e', badge: '#d97706', badgeBg: '#fffbeb' },
+    info:     { bg: '#eff6ff', border: '#bfdbfe', text: '#1e40af', badge: '#2563eb', badgeBg: '#eff6ff' },
   }
 
   const totalAlerts = sections.reduce((s, sec) => s + sec.items.length, 0)
 
   const sectionHtml = sections.map(sec => {
-    const c = severityColors[sec.severity]
+    const c = severityStyles[sec.severity]
     return `
-      <div style="margin:16px 0;">
-        <p style="font-size:15px;font-weight:700;color:#f1f1f1;margin:0 0 10px;">
-          <span style="display:inline-block;width:10px;height:10px;background:${c.badge};border-radius:50%;margin-right:8px;"></span>
+      <table width="100%" cellpadding="0" cellspacing="0" style="margin:16px 0;">
+        <tr><td style="font-size:15px;font-weight:700;color:#1f2937;padding:0 0 10px;font-family:${FONT};">
           ${sec.title} (${sec.items.length})
-        </p>
+        </td></tr>
         ${sec.items.map(item => `
-          <div style="background:${c.bg};border-left:3px solid ${c.border};border-radius:4px;padding:10px 14px;margin:6px 0;">
-            <p style="margin:0;color:${c.text};font-size:13px;">${item}</p>
-          </div>
+          <tr><td style="padding:0 0 6px;">
+            <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="background:${c.bg};border-left:3px solid ${c.badge};padding:10px 14px;">
+              <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="color:${c.text};font-size:13px;font-family:${FONT};">${item}</td></tr></table>
+            </td></tr></table>
+          </td></tr>
         `).join('')}
-      </div>
+      </table>
     `
   }).join('')
 
   return `
 <!DOCTYPE html>
 <html><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/></head>
-<body style="margin:0;padding:0;background:#0f0f1a;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
-<table width="100%" cellpadding="0" cellspacing="0" style="background:#0f0f1a;">
+<body style="margin:0;padding:0;background:#f9fafb;font-family:${FONT};">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f9fafb;">
 <tr><td align="center" style="padding:24px 12px;">
 <table width="640" cellpadding="0" cellspacing="0" style="max-width:640px;width:100%;">
 
   <!-- Header -->
-  <tr><td style="background:#dc2626;padding:20px 28px;border-radius:12px 12px 0 0;">
-    <p style="margin:0;font-size:20px;font-weight:700;color:#fff;">Roof Works of Texas</p>
-    <p style="margin:4px 0 0;font-size:13px;color:#fecaca;">Alert Digest &middot; ${totalAlerts} item(s) need attention</p>
+  <tr><td style="background:#dc2626;padding:20px 28px;">
+    <table width="100%" cellpadding="0" cellspacing="0"><tr>
+      <td style="font-size:20px;font-weight:700;color:#ffffff;font-family:${FONT};">Roof Works of Texas</td>
+    </tr><tr>
+      <td style="font-size:13px;color:#fecaca;padding-top:4px;font-family:${FONT};">Alert Digest &middot; ${totalAlerts} item(s) need attention</td>
+    </tr></table>
   </td></tr>
 
   <!-- Body -->
-  <tr><td style="background:#12121f;padding:28px;border-radius:0 0 12px 12px;">
+  <tr><td style="background:#ffffff;padding:28px;border:1px solid #e5e7eb;border-top:none;">
 
-    <p style="color:#9ca3af;font-size:14px;margin:0 0 20px;">
+    <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="color:#6b7280;font-size:14px;padding-bottom:20px;font-family:${FONT};">
       The following items require your attention:
-    </p>
+    </td></tr></table>
 
     ${sectionHtml}
 
-    <p style="color:#6b7280;font-size:11px;margin:32px 0 0;text-align:center;">
+    <table width="100%" cellpadding="0" cellspacing="0"><tr><td style="color:#9ca3af;font-size:11px;padding-top:32px;text-align:center;font-family:${FONT};">
       Automated alert from ${brand.name} Admin &middot; ${new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago', month: 'long', day: 'numeric', year: 'numeric' })}
-    </p>
+    </td></tr></table>
 
   </td></tr>
 </table>
@@ -207,6 +213,57 @@ export async function GET(req: NextRequest) {
         title: 'Missing W-9 (Subs Paid > $600)',
         items: subsNoW9.map(s => `<strong>${s.name || s.company}</strong> — Total paid: ${fmt$(s.total_paid)} — No W-9 / Tax ID on file`),
         severity: 'info',
+      })
+    }
+
+    // ── NEW: Recurring expenses due in 7 days ─────────────────────────────────
+    const sevenDaysFromNow = new Date(now.getTime() + 7 * 86400000)
+    const upcomingRecurring = await prisma.recurring_expenses.findMany({
+      where: { is_active: true, next_due: { lte: sevenDaysFromNow } },
+      orderBy: { next_due: 'asc' },
+    })
+    if (upcomingRecurring.length > 0) {
+      sections.push({
+        title: 'Recurring Expenses Due Within 7 Days',
+        items: upcomingRecurring.map((r: any) => {
+          const daysLeft = Math.max(0, Math.floor((new Date(r.next_due).getTime() - now.getTime()) / 86400000))
+          return `<strong>${r.description}</strong> — ${fmt$(r.amount)} — due in <strong>${daysLeft} day(s)</strong> (${r.frequency})`
+        }),
+        severity: 'warning',
+      })
+    }
+
+    // ── NEW: Completed jobs missing cost entries (P&L incomplete) ─────────────
+    const jobsMissingCosts = await prisma.estimates.findMany({
+      where: { status: { in: ['INVOICED', 'PAID'] }, job_costs: { none: {} }, updated_at: { gte: fourteenDaysAgo } },
+      select: { id: true, our_total: true, address: true, customer: { select: { name: true } }, status: true },
+      orderBy: { updated_at: 'desc' },
+      take: 10,
+    })
+    if (jobsMissingCosts.length > 0) {
+      sections.push({
+        title: 'Jobs Missing Cost Entries (P&L Incomplete)',
+        items: jobsMissingCosts.map((e: any) => `<strong>${e.customer?.name || 'Unknown'}</strong> — ${e.address} — ${fmt$(e.our_total)} — Status: ${e.status}`),
+        severity: 'info',
+      })
+    }
+
+    // ── NEW: Cash flow warning ────────────────────────────────────────────────
+    const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1)
+    const [monthCashIn, monthExpOut, monthJobCosts, monthRecurringTotal] = await Promise.all([
+      prisma.payments.aggregate({ _sum: { amount: true }, where: { paid_at: { gte: thisMonthStart } } }),
+      prisma.expenses.aggregate({ _sum: { amount: true }, where: { date: { gte: thisMonthStart } } }),
+      prisma.job_costs.aggregate({ _sum: { amount: true }, where: { created_at: { gte: thisMonthStart } } }),
+      prisma.recurring_expenses.aggregate({ _sum: { amount: true }, where: { is_active: true, next_due: { lte: thirtyDaysFromNow } } }),
+    ])
+    const cashIn = (monthCashIn._sum.amount || 0)
+    const cashOut = (monthExpOut._sum.amount || 0) + (monthJobCosts._sum.amount || 0)
+    const projectedOut = cashOut + (monthRecurringTotal._sum.amount || 0)
+    if (cashIn > 0 && projectedOut > cashIn * 1.4) {
+      sections.push({
+        title: 'Cash Flow Warning',
+        items: [`Projected outflows this month (<strong>${fmt$(projectedOut)}</strong>) may exceed cash collected (<strong>${fmt$(cashIn)}</strong>). Review upcoming expenses.`],
+        severity: 'warning',
       })
     }
 
